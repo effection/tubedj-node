@@ -1,4 +1,10 @@
-function Users() {}
+var config = require('config');
+
+var UserIdGenerator = IdGenerator.createFromConfig(config.users.idLength, config.users.idKey, config.users.cacheIds);
+
+function Users(db) {
+
+}
 
 module.exports = Users;
 
@@ -10,7 +16,9 @@ Users.create = function(db, name, cb) {
 			.hset('users:'+nextId, 'socket', -1)
 			.exec(function (err, replies) {
 	            if(err) cb(err, null);
-	            else    cb(null, nextId);
+	            else {
+	            	cb(null, nextId);
+	            }
 	        });
 	});
 }

@@ -32,6 +32,8 @@ Events
 var _ = require('underscore')
   , async = require('async')
   , winston = require('winston')
+  , config = require('config')
+
   , redis = require("redis")
   , restify = require('restify')
   , socketio = require('socket.io')
@@ -39,133 +41,124 @@ var _ = require('underscore')
   , Cookies = require("./cookies.js")
   , Hashids = require('hashids')
   , hashids = new Hashids('TODO ADD SALT', 8)
-  , IdGenerator = require('./ids.js')
+
+  , IdGenerator = require('./IdGenerator.js')
   , Room = require('./room.js')
   , Users = require('./users.js');
 
-var config = {
-	server: {
-		port: 8081
-	},
-	serverName: 'tubedj-server',
+/***** Db Creation *****/
+var roomStore = redis.createClient();
+var userDb = roomStore;
 
-	rooms: {
-		idLength: 8,
-		idKey: 'R00mKey17'
-	},
+roomStore.on('error', function(err) {
+	winston.log('errror', 'Redis client error', err);
+});
 
-	users: {
-		idLength: 8,
-		idKey: 'U5er5Key17'
-	},
+var RoomIdGenerator = IdGenerator.createFromConfig(config.rooms.idLength, config.rooms.idKey, config.rooms.cacheIds);
+var UserIdGenerator = IdGenerator.createFromConfig(config.users.idLength, config.users.idKey, config.users.cacheIds);
 
-	redisServerId: 0,
-	userDbServerId: 0,
-	cookieId: 'tubedj-id'
-};
+var userCookieKeygrip = new Keygrip(config.users.cookie.keys);
 
-var keygrip = new Keygrip(['MySecretTubeDjKey02','MySecretTubeDjKey01']);
-
-var RoomIdCache = [];
-var RoomIdGenerator = new IdGenerator(config.rooms.idLength, config.rooms.idKey, RoomIdCache);
-
-var UserIdCache = [];
-var UserIdGenerator = new IdGenerator(config.users.idLength, config.users.idKey, UserIdCache);
-
-var server = restify.createServer({name: config.serverName});
-var io = socketio.listen(server);
-io.enable('browser client minification');  // send minified client
-io.enable('browser client etag');          // apply etag caching logic based on version number
-io.enable('browser client gzip');          // gzip the file
-//io.set('log level', 1);                    // reduce logging
-io.set('transports', [                     // enable all transports (optional if you want flashsocket)
-    'websocket'
-    , 'flashsocket'
-    , 'htmlfile'
-    , 'xhr-polling'
-    , 'jsonp-polling'
-]);
-io.set("polling duration", 10); 
-
+/****** Server Setup *******/
+var server = restify.createServer({name: config.server.name});
 server.use(restify.fullResponse());
 server.use(restify.queryParser());
 server.use(restify.gzipResponse());
 server.use(restify.bodyParser({ mapParams: false }));
-server.use(restify.throttle({
-  burst: 100,
-  rate: 50,
-  ip: true
-}));
-
-var CORS = function(server) {
-  server.use(function(req, res, next) {
-    if (req.headers.origin) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
+//CORS setup
+server.use(function(req, res, next) {
+	if (req.headers.origin) {
+		res.header('Access-Control-Allow-Origin', req.headers.origin);
     }
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Headers', 'X-Requested-With, Cookie, Set-Cookie, Accept, Access-Control-Allow-Credentials, Origin, Content-Type, Request-Id , X-Api-Version, X-Request-Id');
     res.header('Access-Control-Expose-Headers', 'Set-Cookie');
     return next();
-  });
-  return server.opts('.*', function(req, res, next) {
-    if (req.headers.origin && req.headers['access-control-request-method']) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.header('Access-Control-Allow-Headers', 'X-Requested-With, Cookie, Set-Cookie, Accept, Access-Control-Allow-Credentials, Origin, Content-Type, Request-Id , X-Api-Version, X-Request-Id');
-      res.header('Access-Control-Expose-Headers', 'Set-Cookie');
-      res.header('Allow', req.headers['access-control-request-method']);
-      res.header('Access-Control-Allow-Methods', req.headers['access-control-request-method']);
-      if (req.log) {
-        req.log.info({
-          url: req.url,
-          method: req.headers['access-control-request-method']
-        }, "Preflight");
-      }
-      res.send(204);
-      return next();
-    } else {
-      res.send(404);
-      return next();
-    }
-  });
-};
-
-CORS(server);
-
-/****** API ******/
-
-var redisClient = redis.createClient();
-var userDb = redisClient;
-
-redisClient.on('error', function(err) {
-	winston.log('errror', 'Redis client error', err);
+});
+server.opts('.*', function(req, res, next) {
+	if (req.headers.origin && req.headers['access-control-request-method']) {
+		res.header('Access-Control-Allow-Origin', req.headers.origin);
+		res.header('Access-Control-Allow-Credentials', 'true');
+	 	res.header('Access-Control-Allow-Headers', 'X-Requested-With, Cookie, Set-Cookie, Accept, Access-Control-Allow-Credentials, Origin, Content-Type, Request-Id , X-Api-Version, X-Request-Id');
+		res.header('Access-Control-Expose-Headers', 'Set-Cookie');
+		res.header('Allow', req.headers['access-control-request-method']);
+		res.header('Access-Control-Allow-Methods', req.headers['access-control-request-method']);
+		if (req.log) {
+			req.log.info({
+	 			url: req.url,
+				method: req.headers['access-control-request-method']
+    		}, "Preflight");
+		}
+		res.send(204);
+		return next();
+	} else {
+		res.send(404);
+		return next();
+	}
 });
 
-function decrpytRoomDetails(roomHash) {
-	var roomDetails = hashids.decrypt(roomHash);
-	if(!roomDetails || (roomDetails.length && roomDetails.length < 2)) return false;
+/****** Socket.io Setup *******/
 
-	var room = new Room(redisClient, roomDetails[1]);
-
-	return _.extend(room, {serverId: roomDetails[0], hashId: roomHash});
+var io = socketio.listen(server);
+io.configure('production', function() {
+	io.enable('browser client minification');  // send minified client
+	io.enable('browser client etag');          // apply etag caching logic based on version number
+	io.enable('browser client gzip');          // gzip the file
+	io.set('log level', 1);                    // reduce logging
+	io.set('transports', [                     // enable all transports (optional if you want flashsocket)
+	    'websocket'
+	    , 'flashsocket'
+	    , 'htmlfile'
+	    , 'xhr-polling'
+	    , 'jsonp-polling'
+	]);
+	io.set("polling duration", 10); 
 }
 
-function getCookieUserId(cookies) {
+io.configure('development', function() { 
+	io.enable('browser client gzip');          // gzip the file
+	io.set('transports', [                     // enable all transports (optional if you want flashsocket)
+	    'websocket'
+	    , 'flashsocket'
+	    , 'htmlfile'
+	    , 'xhr-polling'
+	    , 'jsonp-polling'
+	]);
+	io.set("polling duration", 10); 
+}
+
+/****** Helpers *******/
+
+/**
+ * Decrypt room hash.
+ * Returns false if invalid hash or a Room() instance with hashId set to roomHash.
+ * Note: Does not check if room exists!
+ */
+function getRoomFromHash(roomHash) {
+	var roomDetails = RoomIdGenerator.decryptHash(roomHash);
+	if(!roomDetails) return false;
+
+	var room = new Room(roomStore, roomDetails.id);//TODO pass server id to Room()
+	return _.extend(room, {hashId: roomHash});
+}
+
+/**
+ * Find config.users.cookie.name in cookie string and decrypt hash.
+ * Returns false if invalid hash or {id, serverId, hashId} with hashId set to roomHash.
+ * Note: Does not check if user exists!
+ */
+function getUserFromCookie(cookies) {
 
 	var hashId = cookies.get(config.cookieId, { signed: true });
 	if(typeof hashId === "undefined") return false;
 
-	var userDetails = hashids.decrypt(hashId);
-	if(userDetails.length == 2) {
-		return {
-			serverId: userDetails[0],
-			id: userDetails[1],
-			hashId: hashId
-		};
-	}
+	var userDetails = UserIdGenerator.decryptHash(hashId);
+	if(!userDetails) return false;
 
-	return false;
+	return _.extend(userDetails, {hashId: hashId});
 }
+
+/****** API ******/
 
 /*
 
@@ -194,7 +187,7 @@ server.post('/api/users', function(req, res, next) {
 	//Assign an Id to the user if one is not passed, never expires
 	var cookies = Cookies.fromHttp(req, res, keygrip);
 
-	var user = getCookieUserId(cookies);
+	var user = getUserFromCookie(cookies);
 	if(user !== false) return next(new restify.BadMethodError(''));
 
 	var name = req.body.name;
@@ -237,10 +230,10 @@ server.get('/api/rooms', function(req, res, next) {
 server.post('/api/rooms', function(req, res, next) {
 	//Create a room setting its owner id and returning the room id
 
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	Room.create(redisClient, user.id, function(err, room) {
+	Room.create(roomStore, user.id, function(err, room) {
 		if(err) {
 			winston.log('error', 'Failed to create room', err);
 			return next(new restify.InternalError('Failed to create room.'));
@@ -263,13 +256,13 @@ server.post('/api/rooms', function(req, res, next) {
 server.get('/api/rooms/:roomId', function(req, res, next) {
 	//Join the socket.io room if it exists. and send back the playlist
 
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
-	Room.exists(redisClient, room.id, function(err, roomExists) {
+	Room.exists(roomStore, room.id, function(err, roomExists) {
 		if(!roomExists) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 		room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
@@ -368,10 +361,10 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 server.post('/api/rooms/:roomId/leave', function(req, res, next) {
 	//Leave the socket.io room. Can happen just by disconnecting socket.io connection!
 
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
@@ -439,10 +432,10 @@ server.post('/api/rooms/:roomId/leave', function(req, res, next) {
  * Events: playlist:next-song {}
  */
 server.post('/api/rooms/:roomId/next-song', function(req, res, next) {
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	//If isOwner, block user and kick from room
@@ -477,7 +470,7 @@ server.post('/api/rooms/:roomId/next-song', function(req, res, next) {
  * Events: 
  */
 server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	room.getPlaylist(function(err, playlist) {
@@ -507,10 +500,10 @@ server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
  */
 server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
 	//Add song to redis playlist and broadcast change to all users
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	if(!req.body.song) return next(new restify.MissingParameterError('No song given.'));
@@ -565,10 +558,10 @@ server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
  */
 server.del('/api/rooms/:roomId/playlist', function(req, res, next) {
 	//If isOwner, remove song from redis playlist and broadcast change to all users
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	if(!req.body.songUid) return next(new restify.MissingParameterError('No song uid given.'));
@@ -613,10 +606,10 @@ server.del('/api/rooms/:roomId/playlist', function(req, res, next) {
  * Events: user:disconnected {user: id}
  */
 server.post('/api/rooms/:roomId/user/:userId/block', function(req, res, next) {
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	var blockedUserIdHash = req.params.userId;
@@ -669,10 +662,10 @@ server.post('/api/rooms/:roomId/user/:userId/block', function(req, res, next) {
  * Events: 
  */
 server.post('/api/rooms/:roomId/user/:userId/unblock', function(req, res, next) {
-	var user = getCookieUserId(Cookies.fromHttp(req, res, keygrip));
+	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
 	if(user === false) return next(new restify.NotAuthorizedError());
 
-	var room = decrpytRoomDetails(req.params.roomId);
+	var room = getRoomFromHash(req.params.roomId);
 	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 	var unblockedUserIdHash = req.params.userId;
@@ -715,7 +708,7 @@ io.set('authorization', function (data, accept) {
     // check if there's a cookie header
     if (data.headers.cookie) {
         // if there is, parse the cookie
-        var cookies = Cookies.fromHeaderString(data.headers.cookie, keygrip);
+        var cookies = Cookies.fromHeaderString(data.headers.cookie, userCookieKeygrip);
 
         var userIdHash = cookies.get(config.cookieId, { signed: true});
         if(typeof userIdHash === "undefined") return accept('Cookies must be enabled', false);
