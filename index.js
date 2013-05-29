@@ -30,6 +30,7 @@ Events
 */
 
 var _ = require('underscore')
+  , Future = require('fibers/future'), wait = Future.wait
   , async = require('async')
   , winston = require('winston')
   , config = require('config')
@@ -39,10 +40,7 @@ var _ = require('underscore')
   , socketio = require('socket.io')
   , Keygrip = require("keygrip")
   , Cookies = require("./cookies.js")
-  , Hashids = require('hashids')
-  , hashids = new Hashids('TODO ADD SALT', 8)
 
-  , IdGenerator = require('./IdGenerator.js')
   , Room = require('./room.js')
   , Users = require('./users.js');
 
@@ -53,9 +51,6 @@ var userDb = roomStore;
 roomStore.on('error', function(err) {
 	winston.log('errror', 'Redis client error', err);
 });
-
-var RoomIdGenerator = IdGenerator.createFromConfig(config.rooms.idLength, config.rooms.idKey, config.rooms.cacheIds);
-var UserIdGenerator = IdGenerator.createFromConfig(config.users.idLength, config.users.idKey, config.users.cacheIds);
 
 var userCookieKeygrip = new Keygrip(config.users.cookie.keys);
 
@@ -113,7 +108,7 @@ io.configure('production', function() {
 	    , 'jsonp-polling'
 	]);
 	io.set("polling duration", 10); 
-}
+});
 
 io.configure('development', function() { 
 	io.enable('browser client gzip');          // gzip the file
@@ -125,7 +120,7 @@ io.configure('development', function() {
 	    , 'jsonp-polling'
 	]);
 	io.set("polling duration", 10); 
-}
+});
 
 /****** Helpers *******/
 
@@ -134,28 +129,38 @@ io.configure('development', function() {
  * Returns false if invalid hash or a Room() instance with hashId set to roomHash.
  * Note: Does not check if room exists!
  */
-function getRoomFromHash(roomHash) {
-	var roomDetails = RoomIdGenerator.decryptHash(roomHash);
-	if(!roomDetails) return false;
+var getRoomFromHash = function (roomHash, cb) {
+	var roomDetails = Room.IdGenerator.decryptHash(roomHash, function(err, roomDetails){
+		if(err) {
+			//TODO err
+			cb(err, null);
+		}
+		if(!roomDetails) cb(new Error('Invalid room'), null); 
 
-	var room = new Room(roomStore, roomDetails.id);//TODO pass server id to Room()
-	return _.extend(room, {hashId: roomHash});
-}
+		var room = new Room(roomStore, roomDetails.id, roomDetails.serverId);
+		cb(null, _.extend(room, {hashId: roomHash}));
+	});
+};
 
 /**
  * Find config.users.cookie.name in cookie string and decrypt hash.
  * Returns false if invalid hash or {id, serverId, hashId} with hashId set to roomHash.
  * Note: Does not check if user exists!
  */
-function getUserFromCookie(cookies) {
+function getUserFromCookie(cookies, cb) {
 
 	var hashId = cookies.get(config.cookieId, { signed: true });
 	if(typeof hashId === "undefined") return false;
 
-	var userDetails = UserIdGenerator.decryptHash(hashId);
-	if(!userDetails) return false;
+	var userDetails = Users.IdGenerator.decryptHash(hashId, function(err, userDetails) {
+		if(err) {
+			//TODO err
+			cb(err, null);
+		}
+		if(!userDetails) cb(new Error('Invalid user'), null); 
 
-	return _.extend(userDetails, {hashId: hashId});
+		cb(null, _.extend(userDetails, {hashId: hashId}));
+	});
 }
 
 /****** API ******/
@@ -196,18 +201,17 @@ server.post('/api/users', function(req, res, next) {
 		return next(new restify.InvalidArgumentError('Name must be between 2 and 10 chars long'));
 	}
 
-	Users.create(userDb, name, function(err, userId) {
+	Users.create(userDb, name, function(err, user) {
 		if(err) {
 			winston.log('error', 'Failed to create user', err);
 			return next(new restify.InternalError('Failed to create user.'));
 		}
 
 		//Set the cookie of the userId hash. Signed so no tampering
-		var userHash = hashids.encrypt(config.userDbServerId, userId);
-		cookies.set(config.cookieId, userHash, { signed: true });
+		cookies.set(config.cookieId, user.hashId, { signed: true });
 
 		res.json(200, {
-			id: userHash,
+			id: user.hashId,
 			name: name
 		});
 	});
@@ -238,11 +242,8 @@ server.post('/api/rooms', function(req, res, next) {
 			winston.log('error', 'Failed to create room', err);
 			return next(new restify.InternalError('Failed to create room.'));
 		}
-
-		var roomHash = hashids.encrypt(config.redisServerId, room.id);
-
 		res.json(200, {
-			room: roomHash
+			room: room.hashId
 		});
 	});
 });
@@ -250,7 +251,7 @@ server.post('/api/rooms', function(req, res, next) {
 /**
  * Joins a room. Must join a room after you create a room too.
  * Body: {}
- * Returns: {room: id, playlist: [{},{}], users: [{},{}]}
+ * Returns: {id: id, playlist: [{},{}], users: [{},{}]}
  * Events: user:joined {user: id, name: string}
  */
 server.get('/api/rooms/:roomId', function(req, res, next) {
@@ -273,7 +274,23 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 
 				async.parallel({
 					playlist: function getPlaylist(callback) {
-						room.getPlaylist(callback);
+						room.getPlaylist(function(err, playlist) {
+							if(err) {
+								callback(err, null);
+								return;
+							}
+
+							//Santitise owner ids
+							for(var i = 0; i < playlist.length; i++){
+								(function(index) {
+									Users.IdGenerator.encrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) }, function(err, ownerHash) {
+										playlist[index].owner = ownerHash;
+										//Send the completed callback
+										if(index === playlist.length -1) callback(null, playlist);
+									});
+								});
+							}
+						});
 					},
 					usersInRoom: function getUsers(callback) {
 						room.getUsers(function(err, users) {
@@ -281,7 +298,15 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 						});
 					},
 					owner: function getOwner(callback) {
-						room.getOwner(callback);
+						room.getOwner(function(err, owner) {
+							if(err) {
+								callback(err, null);
+								return;
+							}
+
+							//Get owner id hash
+							Users.IdGenerator.encrypt({ serverId: config.db.users.id, id: parseInt(owner) }, callback);
+						});
 					},
 					addUserToRoom: function addMeToList(callback) {
 						if(!userHasJoinedAlready) room.addUser(user.id, callback);
@@ -314,20 +339,11 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 							if(typeof currentRooms !== 'undefined' && currentRooms !== null && currentRooms.length > 1) {
 								return next(new restify.InvalidArgumentError('Already joined a room.'));
 							}
-							socket.emit('test', {msg: 'hi'});
+							
 							socket.join(room.id);
 						}
 					}
 
-					/*if(results.usersInRoom && results.usersInRoom.length) {
-
-
-						for(var i = 0; i < results.usersInRoom.length; i++) {
-							
-
-							results.usersInRoom[i].id = hashids.encrypt(config.userDbServerId, parseInt(results.usersInRoom[i].id));
-						}
-					}*/
 
 					//Tell everyone the user joined
 					io.sockets.in(room.id).emit('user:joined', {
@@ -339,7 +355,7 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 
 					res.json(200, {
 						id: room.hashId, 
-						owner: hashids.encrypt(config.userDbServerId, parseInt(results.owner)),
+						owner: results.owner,
 						playlist: results.playlist, 
 						users: results.usersInRoom
 					});
@@ -466,7 +482,7 @@ server.post('/api/rooms/:roomId/next-song', function(req, res, next) {
 /** 
  * Get the playlist.
  * Body: {}
- * Returns: {room: id, playlist: [{},{}]}
+ * Returns: {playlist: [{},{}]}
  * Events: 
  */
 server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
@@ -479,10 +495,22 @@ server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
 			return next(new restify.InternalError('Failed to get playlist.'));
 		}
 
-		res.json(200, {
-			room: room.hashId,
-			playlist: playlist
-		})
+		//Santitise owner ids
+		for(var i = 0; i < playlist.length; i++){
+			(function(index) {
+				Users.IdGenerator.encrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) }, function(err, ownerHash) {
+					playlist[index].owner = ownerHash;
+
+					//Send the completed callback
+					if(index === playlist.length -1) {
+						res.json(200, {
+							playlist: playlist
+						})
+					}
+				});
+
+			});
+		}
 	});
 });
 
@@ -495,7 +523,7 @@ server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
 		id, title, arist, album, length
 	}
  }
- * Returns: {room: id, song: {}}
+ * Returns: {song: {}}
  * Events: playlist:song-added {song: {}}
  */
 server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
@@ -543,7 +571,6 @@ server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
 			});
 
 			res.json(200, {
-				room: room.hashId,
 				song: song
 			});
 		});
@@ -614,43 +641,47 @@ server.post('/api/rooms/:roomId/user/:userId/block', function(req, res, next) {
 
 	var blockedUserIdHash = req.params.userId;
 	
-	var blockedUserDetails = hashids.decrypt(blockedUserIdHash);
-	if(blockedUserDetails.length !== 2) {
-		return next(new restify.InvalidArgumentError('Invalid user'));
-	} 
-	var blockedUserId = roomDetails[1];
-
-	//If isOwner, block user and kick from room
-	room.isOwner(user.id, function(err, isOwner) {
+	var blockedUserDetails = Users.IdGenerator.decryptHash(blockedUserIdHash, function(err, blockedUserDetails) {
 		if(err) {
-			winston.log('error', 'Couldn\'t check owner of room', err);
-			return next(new restify.InternalError('Couldn\'t check owner of room'));
+			winston.log('error', 'Couldn\'t decrypt user hash', err);
+			return next(new restify.InternalError('Couldn\'t decrypt user hash'));
 		}
-		if(!isOwner) return next(new restify.NotAuthorizedError('You don\'t have permission to block a user'));
+		if(blockedUserDetails === false) return next(new restify.InvalidArgumentError('Invalid user'));
 
-		room.blockUser(blockedUserId, function(err, something) {
+		var blockedUserId = blockedUserDetails.id;
+
+		//If isOwner, block user and kick from room
+		room.isOwner(user.id, function(err, isOwner) {
 			if(err) {
-				winston.log('error', 'Couldn\'t block user from room', err);
-				return next(new restify.InternalError('Couldn\'t block user from room'));
+				winston.log('error', 'Couldn\'t check owner of room', err);
+				return next(new restify.InternalError('Couldn\'t check owner of room'));
 			}
+			if(!isOwner) return next(new restify.NotAuthorizedError('You don\'t have permission to block a user'));
 
-			//Send kick to specific user socket
-			Users.getSocketId(userDb, user.id, function(err, socketId) {
+			room.blockUser(blockedUserId, function(err, something) {
 				if(err) {
-					winston.log('error', 'Couldn\'t kick the user', err);
-					return next(new restify.InternalError('Couldn\'t kick the user'));
+					winston.log('error', 'Couldn\'t block user from room', err);
+					return next(new restify.InternalError('Couldn\'t block user from room'));
 				}
 
-				var socket = io.sockets.socket(socketId);
-				if(typeof socket !== 'undefined' && socket !== null) socket.disconnect();
-			});
+				//Send kick to specific user socket
+				Users.getSocketId(userDb, user.id, function(err, socketId) {
+					if(err) {
+						winston.log('error', 'Couldn\'t kick the user', err);
+						return next(new restify.InternalError('Couldn\'t kick the user'));
+					}
 
-			//Tell everyone the user left
-			io.sockets.in(room.id).emit('user:disconnected', {
-				user: blockedUserIdHash
-			});
+					var socket = io.sockets.socket(socketId);
+					if(typeof socket !== 'undefined' && socket !== null) socket.disconnect();
+				});
 
-			res.json(200, {});
+				//Tell everyone the user left
+				io.sockets.in(room.id).emit('user:disconnected', {
+					user: blockedUserDetails.hashId
+				});
+
+				res.json(200, {});
+			});
 		});
 	});
 });
@@ -670,27 +701,31 @@ server.post('/api/rooms/:roomId/user/:userId/unblock', function(req, res, next) 
 
 	var unblockedUserIdHash = req.params.userId;
 	
-	var unblockedUserDetails = hashids.decrypt(unblockedUserIdHash);
-	if(unblockedUserDetails.length !== 2) {
-		return next(new restify.InvalidArgumentError('Invalid user'));
-	} 
-	var unblockedUserId = roomDetails[1];
-
-	//If isOwner, block user and kick from room
-	room.isOwner(user.id, function(err, isOwner) {
+	var blockedUserDetails = Users.IdGenerator.decryptHash(blockedUserIdHash, function(err, blockedUserDetails) {
 		if(err) {
-			winston.log('error', 'Couldn\'t check owner of room', err);
-			return next(new restify.InternalError('Couldn\'t check owner of room'));
+			winston.log('error', 'Couldn\'t decrypt user hash', err);
+			return next(new restify.InternalError('Couldn\'t decrypt user hash'));
 		}
-		if(!isOwner) return next(new restify.NotAuthorizedError('You don\'t have permission to block a user'));
+		if(blockedUserDetails === false) return next(new restify.InvalidArgumentError('Invalid user'));
 
-		room.unblockUser(unblockedUserId, function(err, something) {
+		var blockedUserId = blockedUserDetails.id;
+
+		//If isOwner, block user and kick from room
+		room.isOwner(user.id, function(err, isOwner) {
 			if(err) {
-				winston.log('error', 'Couldn\'t unblock user from room', err);
-				return next(new restify.InternalError('Couldn\'t unblock user from room'));
+				winston.log('error', 'Couldn\'t check owner of room', err);
+				return next(new restify.InternalError('Couldn\'t check owner of room'));
 			}
+			if(!isOwner) return next(new restify.NotAuthorizedError('You don\'t have permission to block a user'));
 
-			res.json(200, {});
+			room.unblockUser(unblockedUserId, function(err, something) {
+				if(err) {
+					winston.log('error', 'Couldn\'t unblock user from room', err);
+					return next(new restify.InternalError('Couldn\'t unblock user from room'));
+				}
+
+				res.json(200, {});
+			});
 		});
 	});
 });
@@ -716,19 +751,28 @@ io.set('authorization', function (data, accept) {
         data.userIdHash = userIdHash;
         data.userId = null;
 
-        var userDetails = hashids.decrypt(userIdHash);
-		if(userDetails.length !== 2) return accept('Invalid user id', false);
-		
-		data.userIdSeverId = userDetails[0];
-		data.userId = userDetails[1];
+        var userDetails = Users.IdGenerator.decryptHash(userIdHash, function(err, userDetails) {
+        	if(err) {
+        		winston.log('error', 'Couldn\'t get user id', err);
+        		accept('Couldn\'t get user id', false);
+        		return;
+        	}
+			if(userDetails === false) return accept('Invalid user id', false);
+			
+			data.userIdSeverId = userDetails.serverId;
+			data.userId = userDetails.id;
+
+			// accept the incoming connection
+    		accept(null, true);
+		});
         
     } else {
        // if there isn't, turn down the connection with a message
        // and leave the function.
        return accept('Cookies must be enabled', false);
     }
-    // accept the incoming connection
-    accept(null, true);
+    accept('unknown error', false);
+    
 });
 
 io.sockets.on('connection', function (socket) {

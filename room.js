@@ -1,15 +1,46 @@
-var async = require('async');
+var _ = require('underscore')
+  , config = require('config')
+  , async = require('async')
+  , IdGenerator = require('./IdGenerator.js');
 
-function Room(client, id) {
+var RoomIdGenerator = IdGenerator.createFromConfig(config.rooms.idLength, config.rooms.idKey, config.rooms.cacheIds);
+
+function Room(client, id, serverId) {
 	this.id = id;
+	this.serverId = serverId;
 	this.client = client;
 	this.owner = null;
 }
 
 module.exports = Room;
 
+Room.IdGenerator = RoomIdGenerator;
+
+/**
+ * Create a new room.
+ * Returns null or Room() extended with hashId.
+ */
 Room.create = function(client, owner, cb) {
-	client.incr('next-room-id', function(error, nextId) {
+
+	RoomIdGenerator.generate(config.db.rooms.id, true, function(err, idObj) {
+		if(err) {
+			cb(err, null);
+			return;
+		}
+
+		var room = new Room(client, idObj.id, idObj.serverId);
+		room.owner = owner;
+		client.multi()
+			.set('rooms:'+idObj.id, 1)
+			.set(room.key('owner'), owner)
+			.set(room.key('next-song-uid'), 0)
+			.exec(function (err, replies) {
+	            if(err) cb(err, null);
+	            else    cb(null, _.extend(room.prototype, { hashId: idObj.hashId }));
+	        });
+	});
+
+	/*client.incr('next-room-id', function(error, nextId) {
 		var room = new Room(client, nextId);
 		room.owner = owner;
 		client.multi()
@@ -20,25 +51,31 @@ Room.create = function(client, owner, cb) {
 	            if(err) cb(err, null);
 	            else    cb(null, room);
 	        });
-	});
+	});*/
 }
 
-Room.exists = function(client, room, cb) {
-	client.get('rooms:' + room, cb);
-} 
-
+/**
+ * Generate the base key.
+ */
 Room.prototype.key = function(sub) {
 	return 'rooms:' + this.id + ':' + sub;
 }
 
 /**
+ * Check if room id exists
+ */
+Room.exists = function(client, roomId, cb) {
+	client.get('rooms:' + roomId, cb);
+} 
+
+/**
  * Is user owner of room? 
  * Callback: function(err, isOwner:bool) {}
  */
-Room.prototype.isOwner = function(user, cb) {
-	this.getOwner(function(err, owner) {
+Room.prototype.isOwner = function(userId, cb) {
+	this.getOwner(function(err, ownerId) {
 		if(err) return cb(err, false);
-		else	return cb(null, owner == user);
+		else	return cb(null, ownerId == userId);
 	});
 }
 
@@ -64,44 +101,7 @@ Room.prototype.delete = function(cb) {
 /**
  * Callback: function(error, items) {}
  */
-Room.prototype.getPlaylist = function(cb) {
-	
-	/*
-	var self = this;
-	this.client.lrange(this.key('playlist'), 0, -1, function(err, playlist) {
-		if(err) {
-			cb(err, null);
-			return;
-		}
-
-		if(playlist.length <= 0) {
-			cb(null, []);
-			return;
-		}
-
-
-		self.client.hgetall(self.key('songs'), function(err, songs) {
-			if(err) {
-				cb(err, null);
-				return;
-			}
-
-			if(typeof songs !== 'undefined' || songs === null) {
-				cb(null, []);
-				return;
-			}
-
-			var populatedPlaylist = [];
-			playlist.forEach(function(songUid) {
-				populatedPlaylist.push(songs[songUid]);
-			});
-
-			cb(null, populatedPlaylist);
-		});
-	});*/
-	//var base = this.key('songs:*');
-	//this.client.sort(this.key('playlist'), "BY", "nosort", "GET", base+'*->uid', "GET", base+'*->id', "GET", base+'*->isYt', "GET", base+'*->owner', cb);
-	
+Room.prototype.getPlaylist = function(cb) {	
 	var self = this;
 	this.client.lrange(this.key('playlist'), 0, -1, function(err, playlist) {
 		if(err) {

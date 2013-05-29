@@ -4,13 +4,12 @@ function IdGenerator(minLength, key, cache, prefix, generateAhead) {
 	
 	if(cache)
 		//Create an in memory array if cache == true else use the cache object given
-		this.cache = new Store((cache === true ? [] : cache);
+		this.cache = new Store((cache === true ? [] : cache), prefix);
 	else
 		this.cache = false;
 	
 	this.minLength = minLength;
 	this.key = key;
-	this.prefix = prefix || '';
 	this.generateAhead = generateAhead;
 	//Create a hasher
 	this.hashids = new Hashids(this.key, this.minLength);
@@ -54,18 +53,20 @@ function cacheCallback(err, result) {
  * 
  */
 IdGenerator.prototype.generate = function(serverId, generateHashed, cb) {
+	var self = this;
 	this.cache.nextId(function(err, nextId) {
 		if(err || !generateHashed) {
 			cb(err, nextId);
 		}
 
 		if(generateHashed) {
-			var hashed = this.hashids.encrypt(serverId, nextId);
-			this.cache.set(this.prefix + 'id:' + nextId, hashed, cacheCallback);
-			this.cache.set(this.prefix + 'h:' + hashed, nextId, cacheCallback);
+			var hashed = self.hashids.encrypt(serverId, nextId);
+			self.cache.set('id:' + nextId, hashed, cacheCallback);
+			self.cache.set('h:' + hashed, nextId, cacheCallback);
 			cb(null, {
 				serverId: serverId,
-				id: nextId
+				id: nextId,
+				hashId: hashed
 			});
 		}
 	});
@@ -74,16 +75,17 @@ IdGenerator.prototype.generate = function(serverId, generateHashed, cb) {
 /**
  * Check cache, else encrypt
  */
-IdGenerator.prototype.encryptId = function(serverId, id, cb) {
-	this.cache.get(this.prefix + 'id:' + id, function(err, hash) {
+IdGenerator.prototype.encryptId = function(idObj, cb) {
+	var self = this;
+	this.cache.get(this.prefix + 'id:' + idObj.id, function(err, hash) {
 
 		//Generate hash
 		if(err || hash == null) {
-			hash = this.hashids.encrypt(serverId, id);
+			hash = self.hashids.encrypt(idObj.serverId, idObj.id);
 			//Cache id -> hash
-			this.cache.set(this.prefix + 'id:' + id, hash, cacheCallback);
+			self.cache.set('id:' + idObj.id, hash, cacheCallback);
 			//Cache hash -> {serverId, id}
-			this.cache.hset(this.prefix + 'h:' + hashed, {serverId: serverId, id: id}, cacheCallback);
+			self.cache.hset('h:' + hash, {serverId: idObj.serverId, id: idObj.id}, cacheCallback);
 		}
 
 		cb(null, hash);
@@ -94,33 +96,35 @@ IdGenerator.prototype.encryptId = function(serverId, id, cb) {
  * Check cache, else decrypt and return object {id: decypted, serverId: decrypted, : hash: id}
  */
 IdGenerator.prototype.decryptHash = function(hash, cb) {
-	this.cache.hget(this.prefix + 'h:' + hash, function(err, obj) {
+	var self = this;
+	this.cache.hget('h:' + hash, function(err, obj) {
 
 		//Decrypt hash
 		if(err || obj == null) {
-			obj = this.hashids.decrypt(hash);
+			obj = self.hashids.decrypt(hash);
 			obj = {
 				serverId: obj[0],
 				id: obj[1]
 			}
 			//Cache hash - > {serverId, id}
-			this.cache.hset(this.prefix + 'h:' + hashed, obj, cacheCallback);
+			self.cache.hset('h:' + hash, obj, cacheCallback);
 		}
 
 		cb(null, obj);
 	});
 }
 
-function Store(cache) {
+function Store(cache, prefix) {
 	if(Array.isArray(cache))
 		this.cache = true;
 	else 
 		this.cache = false;
 	this.cache = cache;
+	this.prefix = prefix || '';
 }
 
 Store.prototype.nextId = function(cb){
-	var property = '_next-id';
+	var property = this.prefix+'-next-id';
 	if(this.cache) {
 		if(this.cache[property] == null) this.cache[property] = 0;
 		cb(null, this.cache[property]++);
@@ -129,21 +133,25 @@ Store.prototype.nextId = function(cb){
 }
 
 Store.prototype.get = function(property, cb) {
+	property = this.prefix + property;
 	if(this.cache) cb(null, this.cache[property]);
 	else this.cache.get(property, cb);
 }
 
 Store.prototype.set = function(property, value, cb) {
+	property = this.prefix + property;
 	if(this.cache) this.cache[property] = value;
 	else this.cache.set(property, value, (cb == null ? function() {} : cb));
 }
 
 Store.prototype.hget = function(property, cb) {
+	property = this.prefix + property;
 	if(this.cache) cb(null, this.cache[property]);
 	else this.cache.hmgetall(property, cb);
 }
 
 Store.prototype.hset = function(property, value, cb) {
+	property = this.prefix + property;
 	if(this.cache) this.cache[property] = value;
 	else this.cache.hset(property, value, cb);
 }

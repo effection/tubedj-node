@@ -12,7 +12,7 @@ var config = {
 		 * User facing id hashing
 		 */
 		idLength: 8,
-		idKey: 'R00mKey17',
+		idKey: 'TODO ADD SALT',
 
 		/**
 		 * Cache encrypted/decrypted room ids for speed in memory or redis.
@@ -21,7 +21,7 @@ var config = {
 			/**
 			 * Storage prefix.
 			 */
-			prefix: '',
+			prefix: 'cache-',
 
 			/**
 			 * Maintain a list of new ids ready to use.
@@ -56,7 +56,7 @@ var config = {
 		 * User facing id hashing
 		 */
 		idLength: 8,
-		idKey: 'U5er5Key17',
+		idKey: 'TODO ADD SALT',
 
 		cookie: {
 			/**
@@ -70,9 +70,9 @@ var config = {
 			keys: [
 				'MySecretTubeDjKey02',
 				'MySecretTubeDjKey01'
-			];
+			]
 
-		}
+		},
 
 		/**
 		 * Cache encrypted/decrypted user ids for speed in memory or redis.
@@ -81,8 +81,8 @@ var config = {
 			/**
 			 * Storage prefix.
 			 */
-			prefix: '',
-			
+			prefix: 'cache-',
+
 			/**
 			 * Maintain a list of new ids ready to use.
 			 */
@@ -111,28 +111,28 @@ var config = {
 		/**
 		 * Redis connection details for Room storage.
 		 */
-		redisForRooms: {
+		rooms: {
 			id: 0
 		},
 
 		/**
 		 * Redis connection details for User storage.
 		 */
-		redisForUsers: {
+		users: {
 			id: 0
 		},
 
 		/**
 		 * Redis connection details for caching Room Ids if turned on.
 		 */
-		redisForRoomIdsCache: {
+		roomIdsCache: {
 			id: 0
 		},
 
 		/**
 		 * Redis connection details for caching User Ids if turned on.
 		 */
-		redisForUserIdsCache: {
+		userIdsCache: {
 			id: 0
 		}
 	},
