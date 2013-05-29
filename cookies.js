@@ -15,8 +15,6 @@ Cookies.fromHeaderString = function(cookieHeader, keygrip) {
 		},
 		_isFakedForCookies: true
 	}, null, keygrip);
-
-	cookies.cookies = cookies.parse(cookieHeader);
 	return cookies;
 }
 

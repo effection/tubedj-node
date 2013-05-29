@@ -205,7 +205,7 @@ Room.prototype.removeFromPlaylist = function(songUid, cb) {
 		},
 		removeSongFromPlaylist: function removeSong(callback) {
 			//Remove first (and only) song uid from playlist
-			this.client.lrem(this.key('playlist'), 1, songUid, callback);
+			self.client.lrem(self.key('playlist'), 1, songUid, callback);
 		}
 	}, cb);
 }
@@ -216,6 +216,7 @@ Room.prototype.removeFromPlaylist = function(songUid, cb) {
  */
 Room.prototype.getSongOwner = function(songUid, cb) {
 	//this.client.hget(this.key('songs'), songUid, cb);
+
 	this.client.hget(this.key('songs:'+songUid), 'owner', cb);
 }
 
