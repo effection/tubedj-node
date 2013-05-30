@@ -136,7 +136,7 @@ function getRoomFromHash(roomHash) {
 	var def = deferred();
 
 	Room.IdGenerator.decryptHash(roomHash, function(err, roomDetails) {
-		if(!roomDetails) def.reject(new restify.ResourceNotFoundError('Invalid room')); 
+		if(!roomDetails) return def.reject(new restify.ResourceNotFoundError('Invalid room')); 
 
 		var room = new Room(roomStore, roomDetails.id, roomDetails.serverId);
 		def.resolve(_.extend(room, {hashId: roomHash}));
@@ -156,13 +156,14 @@ function getUserFromCookie(cookies) {
 
 
 	var hashId = cookies.get(config.cookieId, { signed: true });
-	if(typeof hashId === "undefined") def.reject(new restify.InvalidCredentialsError('Invalid user')); 
+	if(typeof hashId === "undefined") def.resolve(false); 
+	else {
+		Users.IdGenerator.decryptHash(hashId, function(err, userDetails) {
+			if(!userDetails) return def.reject(new restify.InvalidCredentialsError('Invalid user')); 
 
-	Users.IdGenerator.decryptHash(hashId, function(err, userDetails) {
-		if(!userDetails) def.reject(new restify.InvalidCredentialsError('Invalid user')); 
-
-		def.resolve(_.extend(userDetails, {hashId: hashId}));
-	});
+			def.resolve(_.extend(userDetails, {hashId: hashId}));
+		});
+	}
 
 	return def.promise;
 }
@@ -182,12 +183,64 @@ function preGetUserFromCookie(req, res, next) {
 
 	getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip))
 	.then(function(user) {
-		if(user === false) return next(new restify.NotAuthorizedError());
+		// Don't throw error because you can check if the user object exists if(user === false) return next(new restify.NotAuthorizedError());
 		req.user = user;
 		return next();
 	}).done();
 }
 
+function preIsUserValid(req, res, next) {
+	if(!req.user) return next(new restify.NotAuthorizedError());
+	else return next();
+}
+
+function preUserExists(req, res, next) {
+	next();
+	//TODO
+}
+
+
+function preRoomExists(req, res, next) {
+	if(!req.room) return next(new restify.ResourceNotFoundError('Room not found.'));
+	if(!req.user) return next(new restify.NotAuthorizedError());
+
+	var pRoomExists = promisify(Room.exists);
+
+	pRoomExists(userDb, req.room.id)
+	.then(function(exists) {
+		if(exists == 1) {
+			return next();
+		} else {
+			return next(new restify.ResourceNotFoundError('Room not found.'));
+		}
+	}).done();
+}
+
+function preIsAllowedToUseRoom(req, res, next) {
+	if(!req.room) return next(new restify.ResourceNotFoundError('Room not found.'));
+
+	var pHasUserJoined = _.bind(promisify(req.room.hasUserJoined), req.room);
+	var pIsUserBlocked = _.bind(promisify(req.room.isUserBlocked), req.room);
+
+	req.joinedRoom = false;
+
+	pIsUserBlocked(req.user.id)
+	.then(function(isBlocked) {
+
+		if(isBlocked == 1) {
+			return next(new restify.NotAuthorizedError('Not allowed to join this room.'));
+		}
+		pHasUserJoined(req.user.id)
+		.then(function(hasJoined) {
+			req.joinedRoom = hasJoined == 1;
+			return next();
+		});
+	}).done(function() {
+
+	}, function(err) {
+		next(err);
+	});
+}
 /*
 
 Most frequent
@@ -213,7 +266,7 @@ Most frequent
  */
 server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
 	var user = req.user;
-	if(user !== false) return next(new restify.BadMethodError(''));
+	if(user !== false) return next(new restify.BadMethodError('Already created user'));
 
 	var name = req.body.name;
 
@@ -222,8 +275,10 @@ server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
 
 	var createUser = promisify(Users.create)
 
+
 	createUser(userDb, name)
 	.then(function(user){
+		var cookies = Cookies.fromHttp(req, res, userCookieKeygrip);
 		//Set the cookie of the userId hash. Signed so no tampering
 		cookies.set(config.cookieId, user.hashId, { signed: true });
 
@@ -248,7 +303,7 @@ server.get('/api/rooms', function(req, res, next) {
  * Returns {room: id}
  * Events: 
  */
-server.post('/api/rooms', preGetUserFromCookie, function(req, res, next) {
+server.post('/api/rooms', [preGetUserFromCookie, preIsUserValid], function(req, res, next) {
 	//Create a room setting its owner id and returning the room id
 
 	Room.create(roomStore, req.user.id, function(err, room) {
@@ -268,14 +323,10 @@ server.post('/api/rooms', preGetUserFromCookie, function(req, res, next) {
  * Returns: {id: id, playlist: [{},{}], users: [{},{}]}
  * Events: user:joined {user: id, name: string}
  */
-server.get('/api/rooms/:roomId', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRoomObject, preRoomExists, preIsAllowedToUseRoom], function(req, res, next) {
 	//Join the socket.io room if it exists. and send back the playlist
 	var room = req.room;
 	var user = req.user;
-
-	var pRoomExists = promisify(Room.exists);
-	var pHasUserJoined = _.bind(promisify(room.hasUserJoined), room);
-	var pIsUserBlocked = _.bind(promisify(room.isUserBlocked), room);
 
 	var pParallel = promisify(async.parallel);
 
@@ -287,132 +338,112 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preGetRoomObject], funct
 
 	var pGetOwner = _.bind(promisify(room.getOwner), room);
 
+	async.parallel({
 
-	pRoomExists(roomStore, room.id)
-	.then(function(roomExists) {
-		roomExists = roomExists == '1';
-		if(!roomExists) return (new restify.ResourceNotFoundError('Room not found.'));//TODO ??
+		playlist: function getPlaylist(callback) {
 
-		pHasUserJoined(user.id)
-		.then(function(userHasJoinedAlready) {
-			//if(userHasJoinedAlready) return (new restify.BadMethodError('Already joined this room'));
-			pIsUserBlocked(user.id)
-			.then(function(isBlocked) {
-				if(isBlocked) return (new restify.NotAuthorizedError('Blocked from room'));
+			pGetPlaylist()
+			.then(function(playlist) {
 
-				pParallel({
+				//Santitise owner ids
+				if(!playlist || playlist.length == 0) {
+					return [];//callback(null, []);
+				}
+				for(var i = 0; i < playlist.length; i++){
+					(function(index) {
 
-					playlist: function getPlaylist(callback) {
-
-						pGetPlaylist()
-						.then(function(playlist) {
-
-							//Santitise owner ids
-							if(!playlist || playlist.length == 0) {
-								return callback(null, []);
-							}
-							for(var i = 0; i < playlist.length; i++){
-								(function(index) {
-
-									pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) })
-									.then(function(ownerHash) {
-										playlist[index].owner = ownerHash;
-										
-									}).done(
-									function(result) {
-										//Send the completed callback
-										if(index === playlist.length -1) callback(null, playlist);
-									});
-								})(i);
-							}
-						}).done(function(result) {
-							//TODO not sure if i can call callback() here because it may get executed before the above loop finishes
-						}, function(err) {
-							callback(err);
-						});
-					},
-					usersInRoom: function getUsers(callback) {
-
-						pGetUsers()
-						.then(function(users) {
-							return pUsersGetSantisedUsers(userDb, users);
-						}).done(function(sanitisedUsers) {
-							callback(null, sanitisedUsers);
-						}, function(err) {
-							callback(err);
-						});
-					},
-					owner: function getOwner(callback) {
-
-						pGetOwner()
-						.then(function(owner) {
-							//Get owner id hash
-							return pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(owner) });
-						}).done(function(owner) {
-							callback(null, owner);
-						},
-						function(err) {
-							callback(err);
-						});
-					},
-					addUserToRoom: function addMeToList(callback) {
-						if(!userHasJoinedAlready) room.addUser(user.id, callback);
-						else callback(null, 1);
-					},
-					username: function getUserName(callback) {
-						Users.getName(userDb, user.id, callback);
-					},
-					socketId: function getSocketIdForUser(callback) {
-						Users.getSocketId(userDb, user.id, callback);
-					}
-				})
-				.then(function(results) {
-					if(results.socketId != -1 ) {
-						var socket = io.sockets.socket(results.socketId);
-
-						//If they have made a socket.io connection then check if they are in any rooms and join the specific room.
-						if(typeof socket !== 'undefined' && socket !== null) {
-
-							//Check if they are in any rooms already
-							var currentRooms = io.sockets.manager.roomClients[socket.id];
-							if(typeof currentRooms !== 'undefined' && currentRooms !== null && currentRooms.length > 1) {
-								return (new restify.InvalidArgumentError('Already joined a room.'));
-							}
+						pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) })
+						.then(function(ownerHash) {
+							playlist[index].owner = ownerHash;
 							
-							socket.join(room.id);
-						}
-					}
+						}).done(
+						function(result) {
+							//Send the completed callback
+							if(index === playlist.length -1) callback(null, playlist);
+						});
+					})(i);
+				}
+			}).done(function(result) {
+				//TODO not sure if i can call callback() here because it may get executed before the above loop finishes
+				callback(null, []);
+			}, function(err) {
+				callback(err);
+			});
+		},
+		usersInRoom: function getUsers(callback) {
+
+			pGetUsers()
+			.then(function(users) {
+				return pUsersGetSantisedUsers(userDb, users);
+			}).done(function(sanitisedUsers) {
+				callback(null, sanitisedUsers);
+			}, function(err) {
+				callback(err);
+			});
+		},
+		owner: function getOwner(callback) {
+
+			pGetOwner()
+			.then(function(owner) {
+				//Get owner id hash
+				return pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(owner) });
+			}).done(function(owner) {
+				callback(null, owner);
+			},
+			function(err) {
+				callback(err);
+			});
+		},
+		addUserToRoom: function addMeToList(callback) {
+			if(!req.joinedRoom) room.addUser(user.id, callback);
+			else callback(null, 1);
+		},
+		username: function getUserName(callback) {
+			Users.getName(userDb, user.id, callback);
+		},
+		socketId: function getSocketIdForUser(callback) {
+			Users.getSocketId(userDb, user.id, callback);
+		}
+	}, function(err, results) {
+		if(results.socketId != -1 ) {
+			var socket = io.sockets.socket(results.socketId);
+
+			//If they have made a socket.io connection then check if they are in any rooms and join the specific room.
+			if(typeof socket !== 'undefined' && socket !== null) {
+
+				//Check if they are in any rooms already
+				var currentRooms = io.sockets.manager.roomClients[socket.id];
+				if(typeof currentRooms !== 'undefined' && currentRooms !== null && currentRooms.length > 1) {
+					return (new restify.InvalidArgumentError('Already joined a room.'));
+				}
+				
+				socket.join(room.id);
+			}
+		}
 
 
-					//Tell everyone the user joined
-					io.sockets.in(room.id).emit('user:joined', {
-						user: {
-							id: user.hashId,
-							name: results.username
-						}
-					});
+		//Tell everyone the user joined
+		io.sockets.in(room.id).emit('user:joined', {
+			user: {
+				id: user.hashId,
+				name: results.username
+			}
+		});
 
-					res.json(200, {
-						id: room.hashId, 
-						owner: results.owner,
-						playlist: results.playlist, 
-						users: results.usersInRoom
-					});
-				}).done(function(results) {
-
-				}, function(err) {
-
-				});
-			}).done();
-		}).done();
-
-	}).done(function(results) {
+		res.json(200, {
+			id: room.hashId, 
+			owner: results.owner,
+			playlist: results.playlist, 
+			users: results.usersInRoom
+		});
+	});
+	/*}).done(function(results) {
 		//TODO
 	}, function(err) {
 		winston.log('error', 'Couldn\'t join room', err);
 		room.removeUser(user.id, function() {});
 		return next(new restify.InternalError('Couldn\'t join room'));
-	});
+	});*/
 
 /*
 	Room.exists(roomStore, room.id, function(err, roomExists) {
@@ -526,7 +557,7 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preGetRoomObject], funct
  * Returns: {}
  * Events user:disconnected {user: id}, room:closed {expected: bool}
  */
-server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	//Leave the socket.io room. Can happen just by disconnecting socket.io connection!
 	var room = req.room;
 	var user = req.user;
@@ -595,7 +626,7 @@ server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preGetRoomObject]
  * Returns: {}
  * Events: playlist:next-song {}
  */
-server.post('/api/rooms/:roomId/next-song', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/next-song', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
@@ -670,7 +701,7 @@ server.get('/api/rooms/:roomId/playlist', preGetRoomObject, function(req, res, n
  * Returns: {song: {}}
  * Events: playlist:song-added {song: {}}
  */
-server.post('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	//Add song to redis playlist and broadcast change to all users
 	var user = req.user;
 	var room = req.room;
@@ -724,7 +755,7 @@ server.post('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObje
  * Returns: {}
  * Events: playlist:song-removed {songIndex: index}
  */
-server.del('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.del('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	//If isOwner, remove song from redis playlist and broadcast change to all users
 	var user = req.user;
 	var room = req.room;
@@ -770,7 +801,7 @@ server.del('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObjec
  * Returns: {}
  * Events: user:disconnected {user: id}
  */
-server.post('/api/rooms/:roomId/user/:userId/block', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/user/:userId/block', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
@@ -827,7 +858,7 @@ server.post('/api/rooms/:roomId/user/:userId/block', [preGetUserFromCookie, preG
  * Returns: {}
  * Events: 
  */
-server.post('/api/rooms/:roomId/user/:userId/unblock', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/user/:userId/unblock', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
