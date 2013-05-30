@@ -241,6 +241,66 @@ function preIsAllowedToUseRoom(req, res, next) {
 		next(err);
 	});
 }
+
+function leaveRoom(room, user, res) {
+	var pRoomIsOwner = _.bind(promisify(room.isOwner), room);
+	var pRoomDelete = _.bind(promisify(room.delete), room);
+
+	pRoomIsOwner(user.id)
+	.then(function(isOwner) {
+
+		if(isOwner) {
+			pRoomDelete()
+			.then(function(result) {
+
+				Users.deleteCurrentRoom(userDb, user.id, function(err, result) {
+					if(err) {
+						winston.log('error', 'Couldn\'t set users current room to null', err);
+						return (new restify.InternalError('Couldn\'t leave room'));
+					}
+					//Kick all users and disconnect socket, socket.io should close down the room.
+					io.sockets.clients(room.id).forEach(function (socket) { 
+						socket.emit('room:closed', { expected: true });
+						socket.disconnect();
+					});
+
+					if(res)
+						res.json(200, {});
+				});
+			}).done();
+		}else {
+			async.series({
+				socketId: function getSocketId(callback) {
+					Users.getSocketId(userDb, user.id, callback);
+				},
+
+				setUsersCurrentRoom: function setCurrentRoom(callback) {
+					Users.deleteCurrentRoom(userDb, user.id, callback);
+				},
+
+				removeFromRoom: function removeUser(callback) {
+					room.removeUser(user.id, callback);
+				}
+			}, function(err, results) {
+				if(err) {
+					winston.log('error', 'Couldn\'t remove room', err);
+					return (new restify.InternalError('Couldn\'t leave room'));
+				}
+
+				var socket = io.sockets.socket(results.socketId);
+				if(typeof socket !== 'undefined' && socket !== null) socket.leave(room.id);
+
+				//Tell everyone the user left
+				io.sockets.in(room.id).emit('user:disconnected', {
+					user: user.hashId
+				});
+				if(res)
+					res.json(200, {});
+			});
+		}
+	}).done();
+}
+
 /*
 
 Most frequent
@@ -304,16 +364,24 @@ server.get('/api/rooms', function(req, res, next) {
  * Events: 
  */
 server.post('/api/rooms', [preGetUserFromCookie, preIsUserValid], function(req, res, next) {
-	//Create a room setting its owner id and returning the room id
+	
+	var pUsersGetCurrentRoom = promisify(Users.getCurrentRoom);
+	var pRoomCreate = promisify(Room.create);
 
-	Room.create(roomStore, req.user.id, function(err, room) {
-		if(err) {
-			winston.log('error', 'Failed to create room', err);
-			return next(new restify.InternalError('Failed to create room.'));
+	//If already in room
+	pUsersGetCurrentRoom(userDb, req.user.id)
+	.then(function(currentRoom) {
+		if(currentRoom != null) {
+			return (new restify.BadMethodError('Already in room.'));
 		}
+		return pRoomCreate(roomStore, req.user.id);
+	}).done(function(room) {
 		res.json(200, {
 			room: room.hashId
 		});
+	}, function(err) {
+		winston.log('error', 'Failed to create room', err);
+		return next(new restify.InternalError('Failed to create room.'));
 	});
 });
 
@@ -328,7 +396,7 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 	var room = req.room;
 	var user = req.user;
 
-	var pParallel = promisify(async.parallel);
+	//var pParallel = promisify(async.parallel);
 
 	var pGetPlaylist = _.bind(promisify(room.getPlaylist), room);
 	var pUserIdGeneratorEncrypt = _.bind(promisify(Users.IdGenerator.encryptId), Users.IdGenerator);
@@ -347,7 +415,7 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 
 				//Santitise owner ids
 				if(!playlist || playlist.length == 0) {
-					return [];//callback(null, []);
+					return callback(null, []);
 				}
 				for(var i = 0; i < playlist.length; i++){
 					(function(index) {
@@ -365,7 +433,6 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 				}
 			}).done(function(result) {
 				//TODO not sure if i can call callback() here because it may get executed before the above loop finishes
-				callback(null, []);
 			}, function(err) {
 				callback(err);
 			});
@@ -398,6 +465,9 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 			if(!req.joinedRoom) room.addUser(user.id, callback);
 			else callback(null, 1);
 		},
+		setUsersCurrentRoom: function setCurrentRoom(callback) {
+			Users.setCurrentRoom(userDb, user.id, room.id, callback);
+		},
 		username: function getUserName(callback) {
 			Users.getName(userDb, user.id, callback);
 		},
@@ -405,6 +475,17 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 			Users.getSocketId(userDb, user.id, callback);
 		}
 	}, function(err, results) {
+		if(err) {
+			//Clean up important details
+
+			winston.log('error', 'Couldn\'t join room', err);
+
+			room.removeUser(user.id, function() {});
+			Users.deleteCurrentRoom(userDb, user.id, function() {});
+
+			return next(new restify.InternalError('Couldn\'t join room'));
+		}
+
 		if(results.socketId != -1 ) {
 			var socket = io.sockets.socket(results.socketId);
 
@@ -437,117 +518,6 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
 			users: results.usersInRoom
 		});
 	});
-	/*}).done(function(results) {
-		//TODO
-	}, function(err) {
-		winston.log('error', 'Couldn\'t join room', err);
-		room.removeUser(user.id, function() {});
-		return next(new restify.InternalError('Couldn\'t join room'));
-	});*/
-
-/*
-	Room.exists(roomStore, room.id, function(err, roomExists) {
-		if(!roomExists) return next(new restify.ResourceNotFoundError('Room not found.'));
-
-		room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
-			//if(userHasJoinedAlready) return next(new restify.BadMethodError('Already joined this room'));
-
-			room.isUserBlocked(user.id, function(err, isBlocked) {
-				if(isBlocked) return next(new restify.NotAuthorizedError('Blocked from room'));
-
-				async.parallel({
-					playlist: function getPlaylist(callback) {
-						room.getPlaylist(function(err, playlist) {
-							if(err) {
-								callback(err, null);
-								return;
-							}
-
-							//Santitise owner ids
-							for(var i = 0; i < playlist.length; i++){
-								(function(index) {
-									Users.IdGenerator.encrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) }, function(err, ownerHash) {
-										playlist[index].owner = ownerHash;
-										//Send the completed callback
-										if(index === playlist.length -1) callback(null, playlist);
-									});
-								});
-							}
-						});
-					},
-					usersInRoom: function getUsers(callback) {
-						room.getUsers(function(err, users) {
-							Users.getSantisedUsers(userDb, users, callback)
-						});
-					},
-					owner: function getOwner(callback) {
-						room.getOwner(function(err, owner) {
-							if(err) {
-								callback(err, null);
-								return;
-							}
-
-							//Get owner id hash
-							Users.IdGenerator.encryptId({ serverId: config.db.users.id, id: parseInt(owner) }, callback);
-						});
-					},
-					addUserToRoom: function addMeToList(callback) {
-						if(!userHasJoinedAlready) room.addUser(user.id, callback);
-						else callback(null, 1);
-					},
-					username: function getUserName(callback) {
-						Users.getName(userDb, user.id, callback);
-					},
-					socketId: function getSocketIdForUser(callback) {
-						Users.getSocketId(userDb, user.id, callback);
-					}
-				}, function(err, results) {
-
-					if(err) {
-						winston.log('error', 'Couldn\'t join room', err);
-
-						room.removeUser(user.id, function() {});
-
-						return next(new restify.InternalError('Couldn\'t join room'));
-					}
-
-					if(results.socketId != -1 ) {
-						var socket = io.sockets.socket(results.socketId);
-
-						//If they have made a socket.io connection then check if they are in any rooms and join the specific room.
-						if(typeof socket !== 'undefined' && socket !== null) {
-
-							//Check if they are in any rooms already
-							var currentRooms = io.sockets.manager.roomClients[socket.id];
-							if(typeof currentRooms !== 'undefined' && currentRooms !== null && currentRooms.length > 1) {
-								return next(new restify.InvalidArgumentError('Already joined a room.'));
-							}
-							
-							socket.join(room.id);
-						}
-					}
-
-
-					//Tell everyone the user joined
-					io.sockets.in(room.id).emit('user:joined', {
-						user: {
-							id: user.hashId,
-							name: results.username
-						}
-					});
-
-					res.json(200, {
-						id: room.hashId, 
-						owner: results.owner,
-						playlist: results.playlist, 
-						users: results.usersInRoom
-					});
-				});
-			});
-
-		});
-*/	
-	//});
 });
 
 /**
@@ -557,67 +527,16 @@ server.get('/api/rooms/:roomId', [preGetUserFromCookie, preIsUserValid, preGetRo
  * Returns: {}
  * Events user:disconnected {user: id}, room:closed {expected: bool}
  */
-server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, preGetRoomObject, preIsAllowedToUseRoom], function(req, res, next) {
 	//Leave the socket.io room. Can happen just by disconnecting socket.io connection!
 	var room = req.room;
 	var user = req.user;
+	if(!req.joinedRoom) {
+		res.json(200, {});
+		return;
+	}
 
-	room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
-		if(!userHasJoinedAlready) {
-			res.json(200, {});
-			return;
-		}
-
-		room.isOwner(user.id, function(err, isOwner) {
-			if(isOwner){
-				var retries = 3;
-				function deleteCallback(err, something) {
-					if(err) {
-						if(retries--) room.delete(deleteCallback);
-						else {
-							winston.log('error', 'Couldn\'t remove room', err);
-							return next(new restify.InternalError('Couldn\'t remove room'));
-						}
-					} else {
-						//Kick all users and disconnect socket, socket.io should close down the room.
-						io.sockets.clients(room.id).forEach(function (socket) { 
-							socket.emit('room:closed', { expected: true });
-							socket.disconnect();
-						});
-
-						res.json(200, {});
-					}
-				}
-
-				room.delete(deleteCallback);
-
-			} else {
-				async.series({
-					socketId: function getSocketId(callback) {
-						Users.getSocketId(userDb, user.id, callback);
-					},
-
-					removeFromRoom: function removeUser(callback) {
-						room.removeUser(user.id, callback);
-					}
-				}, function(err, results) {
-					if(err) {
-						winston.log('error', 'Couldn\'t remove room', err);
-						return next(new restify.InternalError('Couldn\'t leave room'));
-					}
-
-					var socket = io.sockets.socket(results.socketId);
-					if(typeof socket !== 'undefined' && socket !== null) socket.leave(room.id);
-
-					//Tell everyone the user left
-					io.sockets.in(room.id).emit('user:disconnected', {
-						user: user.hashId
-					});
-					res.json(200, {});
-				});
-			}
-		});
-	});
+	leaveRoom(room, user, res);
 });
 
 /** 
@@ -922,9 +841,11 @@ io.set('authorization', function (data, accept) {
         	.then(function(exists) {
         		if(exists !== 1) return accept('Invalid user id', false);
 
-        		data.userIdHash = userIdHash;
-	        	data.userIdSeverId = userDetails.serverId;
-				data.userId = userDetails.id;
+        		data.user = {
+        			idHash: userIdHash,
+        			id: userDetails.id,
+        			serverId: userDetails.serverId
+        		};
 
 				// accept the incoming connection
 	    		accept(null, true);
@@ -959,6 +880,23 @@ io.sockets.on('connection', function (socket) {
     socket.on('disconnect', function() {
     	//If is the owner of a room, give data and room grace period before kicking and closing
     	Users.updateSocketId(userDb, socket.handshake.userId, null, function(err, something) {});
+
+    	console.warn('Disconnected!!!!!!!!!!!!');
+
+    	//TODO Change server to store encrypted idds wherever possible
+
+    	var user = socket.handshake.user;
+    	Users.getCurrentRoom(userDb, user.id, function(err, currentRoomId){ 
+			if(err || !currentRoomId) {
+
+			}
+
+			//TODO fix
+			var room = new Room(roomStore, currentRoomId, config.db.rooms.id);
+			leaveRoom(room, user, null);
+		});
+
+    	
     });
 });
 

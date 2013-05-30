@@ -74,6 +74,15 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 		});
 	};
 
+	$scope.leave = function() {
+		//socket.disconnect();
+		//TODO
+		//socket.restart();
+		$scope.room.all('leave').post().then(function(response) {
+
+		});
+	};
+
 	/**
 	 * Create a new room.
 	 */
@@ -115,10 +124,7 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 	$scope.onError = function(error, show) {
 		console.error(error);
-	};
-
-	$scope.leave = function() {
-		console.log('leave');
+		alert(error);
 	};
 
 	$scope.nextSong = function() {
@@ -149,10 +155,10 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	$scope.addToPlaylist = function(song) {
 		$scope.room.all('playlist').post({song: song}).then(function() {
 			//Socket.io will send a message which will update $scope.playlist
-			console.log('Song added to playlist');
+			console.log('Successful add to playlist request');
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Couldn\'t add song to playlist'
+				msg: 'Unsuccessful add to playlist request'
 			}, true);
 		});
 	};
@@ -161,10 +167,10 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 		$scope.room.all('playlist').delete({songUid: songUid}).then(function() {
 			//Socket.io will send a message which will update $scope.playlist
-			console.log('Song removed from playlist');
+			console.log('Successful remove from playlist request');
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Couldn\'t remove song from the playlist'
+				msg: 'Unsuccessful remove from playlist request'
 			}, true);
 		});
 	};

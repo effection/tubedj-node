@@ -18,6 +18,12 @@ app.factory('Socket', function ($rootScope) {
           }
         });
       })
+    },
+    disconnect: function() {
+    	socket.disconnect();
+    },
+    reconnect: function() {
+    	socket = io.connect('http://192.168.0.6:8081');
     }
   };
 });
