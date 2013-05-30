@@ -33,6 +33,10 @@ Users.create = function(db, name, cb) {
 	});
 }
 
+Users.exists = function(db, id, cb) {
+	db.exists('users:' + id, cb);
+}
+
 /**
  * Loop round all ids getting their hash and name. TODO make UserIdGenerator able to send multi() requests
  */

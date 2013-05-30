@@ -21,7 +21,7 @@ var config = {
 			/**
 			 * Storage prefix.
 			 */
-			prefix: 'cache-',
+			prefix: 'rooms-cache-',
 
 			/**
 			 * Maintain a list of new ids ready to use.
@@ -81,7 +81,7 @@ var config = {
 			/**
 			 * Storage prefix.
 			 */
-			prefix: 'cache-',
+			prefix: 'users-cache-',
 
 			/**
 			 * Maintain a list of new ids ready to use.

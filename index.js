@@ -30,7 +30,8 @@ Events
 */
 
 var _ = require('underscore')
-  , Future = require('fibers/future'), wait = Future.wait
+  , deferred = require('deferred')
+  , promisify = require('deferred').promisify
   , async = require('async')
   , winston = require('winston')
   , config = require('config')
@@ -124,46 +125,68 @@ io.configure('development', function() {
 
 /****** Helpers *******/
 
+
+
 /**
  * Decrypt room hash.
  * Returns false if invalid hash or a Room() instance with hashId set to roomHash.
  * Note: Does not check if room exists!
  */
-var getRoomFromHash = function (roomHash, cb) {
-	var roomDetails = Room.IdGenerator.decryptHash(roomHash, function(err, roomDetails){
-		if(err) {
-			//TODO err
-			cb(err, null);
-		}
-		if(!roomDetails) cb(new Error('Invalid room'), null); 
+function getRoomFromHash(roomHash) {
+	var def = deferred();
+
+	Room.IdGenerator.decryptHash(roomHash, function(err, roomDetails) {
+		if(!roomDetails) def.reject(new restify.ResourceNotFoundError('Invalid room')); 
 
 		var room = new Room(roomStore, roomDetails.id, roomDetails.serverId);
-		cb(null, _.extend(room, {hashId: roomHash}));
+		def.resolve(_.extend(room, {hashId: roomHash}));
 	});
-};
+	
+	return def.promise;
+}
 
 /**
  * Find config.users.cookie.name in cookie string and decrypt hash.
  * Returns false if invalid hash or {id, serverId, hashId} with hashId set to roomHash.
  * Note: Does not check if user exists!
  */
-function getUserFromCookie(cookies, cb) {
+function getUserFromCookie(cookies) {
+
+	var def = deferred();
+
 
 	var hashId = cookies.get(config.cookieId, { signed: true });
-	if(typeof hashId === "undefined") return false;
+	if(typeof hashId === "undefined") def.reject(new restify.InvalidCredentialsError('Invalid user')); 
 
-	var userDetails = Users.IdGenerator.decryptHash(hashId, function(err, userDetails) {
-		if(err) {
-			//TODO err
-			cb(err, null);
-		}
-		if(!userDetails) cb(new Error('Invalid user'), null); 
+	Users.IdGenerator.decryptHash(hashId, function(err, userDetails) {
+		if(!userDetails) def.reject(new restify.InvalidCredentialsError('Invalid user')); 
 
-		cb(null, _.extend(userDetails, {hashId: hashId}));
+		def.resolve(_.extend(userDetails, {hashId: hashId}));
 	});
+
+	return def.promise;
+}
+/****** API ******/
+
+
+function preGetRoomObject(req, res, next) {
+	getRoomFromHash(req.params.roomId)
+	.then(function(room) {
+		if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+		req.room = room;
+		return next();
+	}).done();
 }
 
-/****** API ******/
+function preGetUserFromCookie(req, res, next) {
+
+	getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip))
+	.then(function(user) {
+		if(user === false) return next(new restify.NotAuthorizedError());
+		req.user = user;
+		return next();
+	}).done();
+}
 
 /*
 
@@ -188,25 +211,19 @@ Most frequent
  * Returns: {id: id, name: string}
  * Events: 
  */
-server.post('/api/users', function(req, res, next) {
-	//Assign an Id to the user if one is not passed, never expires
-	var cookies = Cookies.fromHttp(req, res, keygrip);
-
-	var user = getUserFromCookie(cookies);
+server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
+	var user = req.user;
 	if(user !== false) return next(new restify.BadMethodError(''));
 
 	var name = req.body.name;
 
-	if(!name || !name.length || name.length < 2 || name.length > 10) {
+	if(!name || !name.length || name.length < 2 || name.length > 10) 
 		return next(new restify.InvalidArgumentError('Name must be between 2 and 10 chars long'));
-	}
 
-	Users.create(userDb, name, function(err, user) {
-		if(err) {
-			winston.log('error', 'Failed to create user', err);
-			return next(new restify.InternalError('Failed to create user.'));
-		}
+	var createUser = promisify(Users.create)
 
+	createUser(userDb, name)
+	.then(function(user){
 		//Set the cookie of the userId hash. Signed so no tampering
 		cookies.set(config.cookieId, user.hashId, { signed: true });
 
@@ -214,7 +231,7 @@ server.post('/api/users', function(req, res, next) {
 			id: user.hashId,
 			name: name
 		});
-	});
+	}).done();
 });
 
 /**
@@ -231,13 +248,10 @@ server.get('/api/rooms', function(req, res, next) {
  * Returns {room: id}
  * Events: 
  */
-server.post('/api/rooms', function(req, res, next) {
+server.post('/api/rooms', preGetUserFromCookie, function(req, res, next) {
 	//Create a room setting its owner id and returning the room id
 
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	Room.create(roomStore, user.id, function(err, room) {
+	Room.create(roomStore, req.user.id, function(err, room) {
 		if(err) {
 			winston.log('error', 'Failed to create room', err);
 			return next(new restify.InternalError('Failed to create room.'));
@@ -254,22 +268,160 @@ server.post('/api/rooms', function(req, res, next) {
  * Returns: {id: id, playlist: [{},{}], users: [{},{}]}
  * Events: user:joined {user: id, name: string}
  */
-server.get('/api/rooms/:roomId', function(req, res, next) {
+server.get('/api/rooms/:roomId', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
 	//Join the socket.io room if it exists. and send back the playlist
+	var room = req.room;
+	var user = req.user;
 
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
+	var pRoomExists = promisify(Room.exists);
+	var pHasUserJoined = _.bind(promisify(room.hasUserJoined), room);
+	var pIsUserBlocked = _.bind(promisify(room.isUserBlocked), room);
 
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+	var pParallel = promisify(async.parallel);
 
+	var pGetPlaylist = _.bind(promisify(room.getPlaylist), room);
+	var pUserIdGeneratorEncrypt = _.bind(promisify(Users.IdGenerator.encryptId), Users.IdGenerator);
+
+	var pGetUsers = _.bind(promisify(room.getUsers), room);
+	var pUsersGetSantisedUsers = promisify(Users.getSantisedUsers);
+
+	var pGetOwner = _.bind(promisify(room.getOwner), room);
+
+
+	pRoomExists(roomStore, room.id)
+	.then(function(roomExists) {
+		roomExists = roomExists == '1';
+		if(!roomExists) return (new restify.ResourceNotFoundError('Room not found.'));//TODO ??
+
+		pHasUserJoined(user.id)
+		.then(function(userHasJoinedAlready) {
+			//if(userHasJoinedAlready) return (new restify.BadMethodError('Already joined this room'));
+			pIsUserBlocked(user.id)
+			.then(function(isBlocked) {
+				if(isBlocked) return (new restify.NotAuthorizedError('Blocked from room'));
+
+				pParallel({
+
+					playlist: function getPlaylist(callback) {
+
+						pGetPlaylist()
+						.then(function(playlist) {
+
+							//Santitise owner ids
+							if(!playlist || playlist.length == 0) {
+								return callback(null, []);
+							}
+							for(var i = 0; i < playlist.length; i++){
+								(function(index) {
+
+									pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(playlist[index].owner) })
+									.then(function(ownerHash) {
+										playlist[index].owner = ownerHash;
+										
+									}).done(
+									function(result) {
+										//Send the completed callback
+										if(index === playlist.length -1) callback(null, playlist);
+									});
+								})(i);
+							}
+						}).done(function(result) {
+							//TODO not sure if i can call callback() here because it may get executed before the above loop finishes
+						}, function(err) {
+							callback(err);
+						});
+					},
+					usersInRoom: function getUsers(callback) {
+
+						pGetUsers()
+						.then(function(users) {
+							return pUsersGetSantisedUsers(userDb, users);
+						}).done(function(sanitisedUsers) {
+							callback(null, sanitisedUsers);
+						}, function(err) {
+							callback(err);
+						});
+					},
+					owner: function getOwner(callback) {
+
+						pGetOwner()
+						.then(function(owner) {
+							//Get owner id hash
+							return pUserIdGeneratorEncrypt({ serverId: config.db.users.id, id: parseInt(owner) });
+						}).done(function(owner) {
+							callback(null, owner);
+						},
+						function(err) {
+							callback(err);
+						});
+					},
+					addUserToRoom: function addMeToList(callback) {
+						if(!userHasJoinedAlready) room.addUser(user.id, callback);
+						else callback(null, 1);
+					},
+					username: function getUserName(callback) {
+						Users.getName(userDb, user.id, callback);
+					},
+					socketId: function getSocketIdForUser(callback) {
+						Users.getSocketId(userDb, user.id, callback);
+					}
+				})
+				.then(function(results) {
+					if(results.socketId != -1 ) {
+						var socket = io.sockets.socket(results.socketId);
+
+						//If they have made a socket.io connection then check if they are in any rooms and join the specific room.
+						if(typeof socket !== 'undefined' && socket !== null) {
+
+							//Check if they are in any rooms already
+							var currentRooms = io.sockets.manager.roomClients[socket.id];
+							if(typeof currentRooms !== 'undefined' && currentRooms !== null && currentRooms.length > 1) {
+								return (new restify.InvalidArgumentError('Already joined a room.'));
+							}
+							
+							socket.join(room.id);
+						}
+					}
+
+
+					//Tell everyone the user joined
+					io.sockets.in(room.id).emit('user:joined', {
+						user: {
+							id: user.hashId,
+							name: results.username
+						}
+					});
+
+					res.json(200, {
+						id: room.hashId, 
+						owner: results.owner,
+						playlist: results.playlist, 
+						users: results.usersInRoom
+					});
+				}).done(function(results) {
+
+				}, function(err) {
+
+				});
+			}).done();
+		}).done();
+
+	}).done(function(results) {
+		//TODO
+	}, function(err) {
+		winston.log('error', 'Couldn\'t join room', err);
+		room.removeUser(user.id, function() {});
+		return next(new restify.InternalError('Couldn\'t join room'));
+	});
+
+/*
 	Room.exists(roomStore, room.id, function(err, roomExists) {
 		if(!roomExists) return next(new restify.ResourceNotFoundError('Room not found.'));
 
 		room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
 			//if(userHasJoinedAlready) return next(new restify.BadMethodError('Already joined this room'));
 
-			room.isUserBlocked(room.id, function(err, isBlocked) {
+			room.isUserBlocked(user.id, function(err, isBlocked) {
 				if(isBlocked) return next(new restify.NotAuthorizedError('Blocked from room'));
 
 				async.parallel({
@@ -305,7 +457,7 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 							}
 
 							//Get owner id hash
-							Users.IdGenerator.encrypt({ serverId: config.db.users.id, id: parseInt(owner) }, callback);
+							Users.IdGenerator.encryptId({ serverId: config.db.users.id, id: parseInt(owner) }, callback);
 						});
 					},
 					addUserToRoom: function addMeToList(callback) {
@@ -363,8 +515,8 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
 			});
 
 		});
-		
-	});
+*/	
+	//});
 });
 
 /**
@@ -374,14 +526,10 @@ server.get('/api/rooms/:roomId', function(req, res, next) {
  * Returns: {}
  * Events user:disconnected {user: id}, room:closed {expected: bool}
  */
-server.post('/api/rooms/:roomId/leave', function(req, res, next) {
+server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
 	//Leave the socket.io room. Can happen just by disconnecting socket.io connection!
-
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+	var room = req.room;
+	var user = req.user;
 
 	room.hasUserJoined(user.id, function(err, userHasJoinedAlready) {
 		if(!userHasJoinedAlready) {
@@ -447,12 +595,9 @@ server.post('/api/rooms/:roomId/leave', function(req, res, next) {
  * Returns: {}
  * Events: playlist:next-song {}
  */
-server.post('/api/rooms/:roomId/next-song', function(req, res, next) {
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+server.post('/api/rooms/:roomId/next-song', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+	var user = req.user;
+	var room = req.room;
 
 	//If isOwner, block user and kick from room
 	room.isOwner(user.id, function(err, isOwner) {
@@ -485,9 +630,8 @@ server.post('/api/rooms/:roomId/next-song', function(req, res, next) {
  * Returns: {playlist: [{},{}]}
  * Events: 
  */
-server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+server.get('/api/rooms/:roomId/playlist', preGetRoomObject, function(req, res, next) {
+	var room = req.room;
 
 	room.getPlaylist(function(err, playlist) {
 		if(err) {
@@ -526,13 +670,10 @@ server.get('/api/rooms/:roomId/playlist', function(req, res, next) {
  * Returns: {song: {}}
  * Events: playlist:song-added {song: {}}
  */
-server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
+server.post('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
 	//Add song to redis playlist and broadcast change to all users
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+	var user = req.user;
+	var room = req.room;
 
 	if(!req.body.song) return next(new restify.MissingParameterError('No song given.'));
 
@@ -583,13 +724,10 @@ server.post('/api/rooms/:roomId/playlist', function(req, res, next) {
  * Returns: {}
  * Events: playlist:song-removed {songIndex: index}
  */
-server.del('/api/rooms/:roomId/playlist', function(req, res, next) {
+server.del('/api/rooms/:roomId/playlist', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
 	//If isOwner, remove song from redis playlist and broadcast change to all users
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+	var user = req.user;
+	var room = req.room;
 
 	if(!req.body.songUid) return next(new restify.MissingParameterError('No song uid given.'));
 	var songUid = req.body.songUid;
@@ -632,12 +770,9 @@ server.del('/api/rooms/:roomId/playlist', function(req, res, next) {
  * Returns: {}
  * Events: user:disconnected {user: id}
  */
-server.post('/api/rooms/:roomId/user/:userId/block', function(req, res, next) {
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+server.post('/api/rooms/:roomId/user/:userId/block', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+	var user = req.user;
+	var room = req.room;
 
 	var blockedUserIdHash = req.params.userId;
 	
@@ -692,12 +827,9 @@ server.post('/api/rooms/:roomId/user/:userId/block', function(req, res, next) {
  * Returns: {}
  * Events: 
  */
-server.post('/api/rooms/:roomId/user/:userId/unblock', function(req, res, next) {
-	var user = getUserFromCookie(Cookies.fromHttp(req, res, userCookieKeygrip));
-	if(user === false) return next(new restify.NotAuthorizedError());
-
-	var room = getRoomFromHash(req.params.roomId);
-	if(room === false) return next(new restify.ResourceNotFoundError('Room not found.'));
+server.post('/api/rooms/:roomId/user/:userId/unblock', [preGetUserFromCookie, preGetRoomObject], function(req, res, next) {
+	var user = req.user;
+	var room = req.room;
 
 	var unblockedUserIdHash = req.params.userId;
 	
@@ -748,30 +880,38 @@ io.set('authorization', function (data, accept) {
         var userIdHash = cookies.get(config.cookieId, { signed: true});
         if(typeof userIdHash === "undefined") return accept('Cookies must be enabled', false);
 
-        data.userIdHash = userIdHash;
-        data.userId = null;
 
-        var userDetails = Users.IdGenerator.decryptHash(userIdHash, function(err, userDetails) {
-        	if(err) {
-        		winston.log('error', 'Couldn\'t get user id', err);
-        		accept('Couldn\'t get user id', false);
-        		return;
-        	}
-			if(userDetails === false) return accept('Invalid user id', false);
-			
-			data.userIdSeverId = userDetails.serverId;
-			data.userId = userDetails.id;
+        var defDecryptHash = _.bind(promisify(Users.IdGenerator.decryptHash), Users.IdGenerator);
 
-			// accept the incoming connection
-    		accept(null, true);
-		});
+        defDecryptHash(userIdHash)
+        .then(function(userDetails) {
+        	if(userDetails === false) return accept('Invalid user id', false);
+
+        	return promisify(Users.exists)(userDb, userDetails.id)
+        	.then(function(exists) {
+        		if(exists !== 1) return accept('Invalid user id', false);
+
+        		data.userIdHash = userIdHash;
+	        	data.userIdSeverId = userDetails.serverId;
+				data.userId = userDetails.id;
+
+				// accept the incoming connection
+	    		accept(null, true);
+        	});
+
+        }).done(function(result) {
+        	
+        },
+        function(err) {
+        	winston.log('error', 'Couldn\'t authorize socket', err);
+        	accept('error', false);
+        });
         
     } else {
        // if there isn't, turn down the connection with a message
        // and leave the function.
        return accept('Cookies must be enabled', false);
     }
-    accept('unknown error', false);
     
 });
 

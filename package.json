@@ -1,0 +1,21 @@
+{
+  "name": "tube-dj-server",
+  "description": "",
+  "main": "index.js",
+  "author": {
+    "name": "Jordan Hamill"
+  },
+  "version": "0.0.1",
+  "dependencies": {
+    "async": "~0.2.9",
+    "underscore": "~1.4.4",
+    "config": "~0.4.25",
+    "hashids": "~0.1.4",
+    "keygrip": "~0.2.2",
+    "winston": "~0.7.1",
+    "redis": "~0.8.3",
+    "restify": "~2.5.1",
+    "socket.io": "~0.9.14",
+    "deferred": "~0.6.4"
+  }
+}

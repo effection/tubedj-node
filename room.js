@@ -30,13 +30,14 @@ Room.create = function(client, owner, cb) {
 
 		var room = new Room(client, idObj.id, idObj.serverId);
 		room.owner = owner;
+		room.hashId = idObj.hashId;
 		client.multi()
 			.set('rooms:'+idObj.id, 1)
 			.set(room.key('owner'), owner)
 			.set(room.key('next-song-uid'), 0)
 			.exec(function (err, replies) {
 	            if(err) cb(err, null);
-	            else    cb(null, _.extend(room.prototype, { hashId: idObj.hashId }));
+	            else    cb(null, room);
 	        });
 	});
 

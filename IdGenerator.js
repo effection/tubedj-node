@@ -62,7 +62,7 @@ IdGenerator.prototype.generate = function(serverId, generateHashed, cb) {
 		if(generateHashed) {
 			var hashed = self.hashids.encrypt(serverId, nextId);
 			self.cache.set('id:' + nextId, hashed, cacheCallback);
-			self.cache.set('h:' + hashed, nextId, cacheCallback);
+			self.cache.hset('h:' + hashed, {serverId: serverId, id: nextId}, cacheCallback);
 			cb(null, {
 				serverId: serverId,
 				id: nextId,
@@ -115,17 +115,14 @@ IdGenerator.prototype.decryptHash = function(hash, cb) {
 }
 
 function Store(cache, prefix) {
-	if(Array.isArray(cache))
-		this.cache = true;
-	else 
-		this.cache = false;
+	this.isMem = Array.isArray(cache);
 	this.cache = cache;
 	this.prefix = prefix || '';
 }
 
 Store.prototype.nextId = function(cb){
 	var property = this.prefix+'-next-id';
-	if(this.cache) {
+	if(this.isMem) {
 		if(this.cache[property] == null) this.cache[property] = 0;
 		cb(null, this.cache[property]++);
 	}
@@ -134,24 +131,24 @@ Store.prototype.nextId = function(cb){
 
 Store.prototype.get = function(property, cb) {
 	property = this.prefix + property;
-	if(this.cache) cb(null, this.cache[property]);
+	if(this.isMem) cb(null, this.cache[property]);
 	else this.cache.get(property, cb);
 }
 
 Store.prototype.set = function(property, value, cb) {
 	property = this.prefix + property;
-	if(this.cache) this.cache[property] = value;
+	if(this.isMem) this.cache[property] = value;
 	else this.cache.set(property, value, (cb == null ? function() {} : cb));
 }
 
 Store.prototype.hget = function(property, cb) {
 	property = this.prefix + property;
-	if(this.cache) cb(null, this.cache[property]);
+	if(this.isMem) cb(null, this.cache[property]);
 	else this.cache.hmgetall(property, cb);
 }
 
 Store.prototype.hset = function(property, value, cb) {
 	property = this.prefix + property;
-	if(this.cache) this.cache[property] = value;
+	if(this.isMem) this.cache[property] = value;
 	else this.cache.hset(property, value, cb);
 }
