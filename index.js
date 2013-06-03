@@ -249,7 +249,7 @@ function leaveRoom(room, user, res) {
 						return (new restify.InternalError('Couldn\'t leave room'));
 					}
 					//Kick all users and disconnect socket, socket.io should close down the room.
-					io.sockets.clients(room.id).forEach(function (socket) { 
+					io.sockets.clients(room.hashId).forEach(function (socket) { 
 						socket.emit('room:closed', { expected: true });
 						socket.disconnect();
 					});
@@ -269,7 +269,7 @@ function leaveRoom(room, user, res) {
 				},
 
 				removeFromRoom: function removeUser(callback) {
-					room.removeUser(user.id, callback);
+					room.removeUser(user.hashId, callback);
 				}
 			}, function(err, results) {
 				if(err) {
@@ -278,10 +278,10 @@ function leaveRoom(room, user, res) {
 				}
 
 				var socket = io.sockets.socket(results.socketId);
-				if(typeof socket !== 'undefined' && socket !== null) socket.leave(room.id);
+				if(typeof socket !== 'undefined' && socket !== null) socket.leave(room.hashId);
 
 				//Tell everyone the user left
-				io.sockets.in(room.id).emit('user:disconnected', {
+				io.sockets.in(room.hashId).emit('user:disconnected', {
 					user: user.hashId
 				});
 				if(res)
@@ -421,7 +421,7 @@ server.get('/api/rooms/:roomId', [preUserMustExist, preGetUserFromCookie, preIsU
 							if(err) return forEachCallback(err);
 							user.getName(function(err, name) {
 								if(err) return forEachCallback(err);
-								forEachCallback(null, {id: userHash, username: name});
+								forEachCallback(null, {id: userHash, name: name});
 							});
 							
 						});
@@ -472,18 +472,24 @@ server.get('/api/rooms/:roomId', [preUserMustExist, preGetUserFromCookie, preIsU
 					return (new restify.InvalidArgumentError('Already joined a room.'));
 				}
 				
-				socket.join(room.id);
+				socket.join(room.hashId);
+
+				socket.broadcast.to(room.hashId).emit('user:joined', {
+					user: {
+						id: user.hashId,
+						name: results.username
+					}
+				});
 			}
+		} else {
+			//Tell everyone the user joined
+			io.sockets.in(room.hashId).emit('user:joined', {
+				user: {
+					id: user.hashId,
+					name: results.username
+				}
+			});
 		}
-
-
-		//Tell everyone the user joined
-		io.sockets.in(room.id).emit('user:joined', {
-			user: {
-				id: user.hashId,
-				name: results.username
-			}
-		});
 
 		res.json(200, {
 			id: room.hashId, 
@@ -540,7 +546,7 @@ server.post('/api/rooms/:roomId/next-song', [preUserMustExist, preGetUserFromCoo
 			}
 
 			//Tell everyone its the next song
-			io.sockets.in(room.id).emit('playlist:next-song', {
+			io.sockets.in(room.hashId).emit('playlist:next-song', {
 				
 			});
 			res.json(200, {});
@@ -615,7 +621,7 @@ server.post('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCook
 				return next(new restify.InternalError('Couldn\'t add song to playlist'));
 			}
 
-			io.sockets.in(room.id).emit('playlist:song-added', {
+			io.sockets.in(room.hashId).emit('playlist:song-added', {
 				song: song
 			});
 
@@ -647,7 +653,7 @@ server.del('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCooki
 				winston.log('error', 'Couldn\'t remove song from playlist', err);
 				return next(new restify.InternalError('Couldn\'t remove song from playlist'));
 			}
-			io.sockets.in(room.id).emit('playlist:song-removed', {
+			io.sockets.in(room.hashId).emit('playlist:song-removed', {
 				songUid: songUid
 			});
 
@@ -720,7 +726,7 @@ server.post('/api/rooms/:roomId/user/:userId/block', [preUserMustExist, preGetUs
 				});
 
 				//Tell everyone the user left
-				io.sockets.in(room.id).emit('user:disconnected', {
+				io.sockets.in(room.hashId).emit('user:disconnected', {
 					user: blockedUserDetails.hashId
 				});
 
@@ -836,6 +842,15 @@ io.sockets.on('connection', function (socket) {
     		socket.emit('error', {msg: 'Couldn\'t pair connection'});
     		return;
     	}
+    	var pUserGetCurrentRoom = _.bind(promisify(user.getCurrentRoom), user);
+
+    	pUserGetCurrentRoom()
+    	.then(function(currentRoomId) {
+    		if(currentRoomId) {
+    			socket.join(currentRoomId)
+    		}
+    	}).done();
+
     	var pUserUpdateSocketId = _.bind(promisify(user.updateSocketId), user);
     	return pUserUpdateSocketId(socket.id);
 
@@ -852,9 +867,9 @@ io.sockets.on('connection', function (socket) {
     	console.warn('Disconnected!!!!!!!!!!!!');
     	var pGetUser = promisify(UserManager.getUser);
 
+    	var handshakeUser = socket.handshake.user;
 
-
-    	pGetUser(socket.handshake.user.serverId, socket.handshake.user.id, true)
+    	pGetUser(handshakeUser.serverId, handshakeUser.id, true)
     	.then(function(user) {
     		if(!user) {
     		 	winston.log('error', 'Couldn\'t get user', err);
@@ -874,6 +889,8 @@ io.sockets.on('connection', function (socket) {
 							winston.log('error', 'Couldn\'t get room from hash on disconnect', err);
 							return
 						}
+						user.hashId = handshakeUser.hashId;
+						room.hashId = currentRoomId;
 						leaveRoom(room, user, null);
 					});
 				}
