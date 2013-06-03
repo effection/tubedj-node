@@ -68,6 +68,7 @@
 		<!--<div ng-view></div>-->
 		<div ng-controller='RoomController'>
 			<div>
+				<input type='text'  ng-model='username'/>
 				<input type='button' ng-click='createUser();' value='Create user'/>
 				<input type='button' ng-click='create();' value='Create room'/>
 				<input type='button' ng-click='joinHelper();' value='Join room'/>
@@ -87,12 +88,9 @@
 
 				<span>Users</span>
 				<ul style='list-style:none;'>
-					<li style='background-color:#999; padding: 4px; border: 1px solid #CCC;'>
-						<span>{{GlobalState.user.id}}</span>
-					</li>
 					<li ng-repeat='user in users' style='background-color:#999; padding: 4px; border: 1px solid #CCC;'>
 						
-						<span>{{user.name}}</span>
+						<span>{{user.name}} ({{user.id}})</span>
 						<input type='Button' ng-click='blockUser("{{user.id}}");' value='Block'/>
 					</li>
 				</ul>

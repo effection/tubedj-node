@@ -2,7 +2,9 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 	var rooms = Restangular.all('rooms');
 
-	$scope.id = "pT9yCxi7";
+	$scope.username = 'Jordan';
+
+	$scope.id = "piyp5sbi";
 	$scope.owner = null;
 	$scope.playlist = [];
 	$scope.users = [];
@@ -19,15 +21,15 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	socket.on('test', function(msg) {
 		console.log('test', msg);
 	})
-	socket.on('user:joined', function (user) {
-		console.log(user);
-		$scope.users.push(user);
+	socket.on('user:joined', function (data) {
+		console.log('User joined', data);
+		$scope.users.push(data.user);
 	});
-	socket.on('user:disconnected', function (user) {
-		console.log('User disconnected');
+	socket.on('user:disconnected', function (data) {
+		console.log('User disconnected', data);
 		var index, found = false;
-		for(index = 0; i < $scope.users.length; index++) {
-			if($scope.users[index].id == user){
+		for(index = 0; index < $scope.users.length; index++) {
+			if($scope.users[index].id == data.user){
 				console.log('Found');
 				found = true;
 				break;
@@ -37,6 +39,17 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	});
 	socket.on('room:closed', function (data) {
 		console.log('Room closed. ' + (data.expected ? ' Expected...' : 'Wasn\'t expected!'));
+
+		if(data.expected) {
+
+			$scope.room = null;
+			//$scope.id = '';
+			$scope.owner = null;
+			$scope.playlist = [];
+			$scope.users = [];
+
+		}
+
 	});
 	socket.on('playlist:next-song', function (data) {
 		console.log('Mark next song as playing');
@@ -52,7 +65,7 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	socket.on('playlist:song-removed', function (data) {
 		console.log('Song removed from playlist', data);
 		var index, found = false;
-		for(index = 0; i < $scope.playlist.length; index++) {
+		for(index = 0; index < $scope.playlist.length; index++) {
 			if($scope.playlist[index].uid == data.songUId){
 				console.log('Found');
 				found = true;
@@ -65,11 +78,16 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 	
 	$scope.createUser = function() {
-		Restangular.all('users').post({name: 'Jordan'}).then(function(response) {
+		Restangular.all('users').post({name: $scope.username}).then(function(response) {
 			console.log('New user', response);
 		}, function(reason) {
+			if(reason.status == 300) {
+				$scope.createUser();
+				return;
+			} 
 			$scope.onError({
-				msg: 'Couldn\'t create user'
+				msg: 'Couldn\'t create user', 
+				reason: reason
 			}, true);
 		});
 	};
@@ -92,7 +110,8 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 			$scope.join(response.room);
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Couldn\'t create room'
+				msg: 'Couldn\'t create room', 
+				reason: reason
 			}, true);
 		});
 	};
@@ -103,6 +122,8 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	$scope.join = function(roomId) {
 		if(roomId === null || roomId.length < 8) return;
 
+		$scope.users = [];
+
 		Restangular.one('rooms', roomId).get().then(function(response) {
 			$scope.GlobalState.room.id = response.id;
 
@@ -111,13 +132,14 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 			$scope.id = response.id;
 			$scope.owner = response.owner;
 			$scope.playlist = response.playlist;
-			$scope.users = response.users;
+			$scope.users = $scope.users.concat(response.users);
 
 			console.log('Joined room: ' + roomId);
 
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Couldn\'t join room'
+				msg: 'Couldn\'t join room', 
+				reason: reason
 			}, true);
 		});
 	};
@@ -136,7 +158,8 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 				//TODO nextSong() success 
 			}, function(reason) {
 				$scope.onError({
-					msg: 'Couldn\'t play next song'
+					msg: 'Couldn\'t play next song', 
+				reason: reason
 				}, true);
 			});
 		}
@@ -147,8 +170,9 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 			console.log('Refreshed');
 		}, function(reason) {
 			$scope.onError({
-					msg: 'Couldn\'t refresh playlist'
-				}, true);
+				msg: 'Couldn\'t refresh playlist', 
+				reason: reason
+			}, true);
 		});
 	};
 
@@ -158,7 +182,8 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 			console.log('Successful add to playlist request');
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Unsuccessful add to playlist request'
+				msg: 'Unsuccessful add to playlist request', 
+				reason: reason
 			}, true);
 		});
 	};
@@ -170,7 +195,8 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 			console.log('Successful remove from playlist request');
 		}, function(reason) {
 			$scope.onError({
-				msg: 'Unsuccessful remove from playlist request'
+				msg: 'Unsuccessful remove from playlist request', 
+				reason: reason
 			}, true);
 		});
 	};

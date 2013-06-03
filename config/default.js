@@ -111,16 +111,34 @@ var config = {
 		/**
 		 * Redis connection details for Room storage.
 		 */
-		rooms: {
-			id: 0
-		},
+		rooms: [
+			{
+				id: 100,
+				address: null,
+				auth: {
+					username: null,
+					password: null
+				},
+
+				options: {}
+			}
+		],
 
 		/**
 		 * Redis connection details for User storage.
 		 */
-		users: {
-			id: 0
-		},
+		users: [
+			{
+				id: 0,
+				address: null,
+				auth: {
+					username: null,
+					password: null
+				},
+
+				options: {}
+			}
+		],
 
 		/**
 		 * Redis connection details for caching Room Ids if turned on.
