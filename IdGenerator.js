@@ -1,5 +1,10 @@
 Hashids = require('hashids');
-
+var redis = require("redis");
+/**
+ * cache == false - no chache
+ * cache == true - memory array cache
+ * cache == obj - obj
+ */
 function IdGenerator(minLength, key, cache, prefix, generateAhead) {
 	
 	if(cache)
@@ -31,8 +36,8 @@ IdGenerator.createFromConfig = function(idLength, idKey, opts) {
 	}
 
 	if(useCache && useRedis) {
-		//TODO Redis id caching server details from opts
-		//cache = redis.createClient();
+		cache = redis.createClient();
+
 	} 
 
 	return new IdGenerator(idLength, idKey, (useCache? cache : false), prefix, generateAhead);
@@ -61,8 +66,8 @@ IdGenerator.prototype.generate = function(serverId, generateHashed, cb) {
 
 		if(generateHashed) {
 			var hashed = self.hashids.encrypt(serverId, nextId);
-			self.cache.set('id:' + nextId, hashed, cacheCallback);
-			self.cache.hset('h:' + hashed, {serverId: serverId, id: nextId}, cacheCallback);
+			//self.cache.set('id:' + nextId, hashed, cacheCallback);
+			//self.cache.hset('h:' + hashed, {serverId: serverId, id: nextId}, cacheCallback);
 			cb(null, {
 				serverId: serverId,
 				id: nextId,
@@ -83,9 +88,9 @@ IdGenerator.prototype.encryptId = function(idObj, cb) {
 		if(err || hash == null) {
 			hash = self.hashids.encrypt(idObj.serverId, idObj.id);
 			//Cache id -> hash
-			self.cache.set('id:' + idObj.id, hash, cacheCallback);
+			//self.cache.set('id:' + idObj.id, hash, cacheCallback);
 			//Cache hash -> {serverId, id}
-			self.cache.hset('h:' + hash, {serverId: idObj.serverId, id: idObj.id}, cacheCallback);
+			//self.cache.hset('h:' + hash, {serverId: idObj.serverId, id: idObj.id}, cacheCallback);
 		}
 
 		cb(null, hash);
@@ -107,7 +112,7 @@ IdGenerator.prototype.decryptHash = function(hash, cb) {
 				id: obj[1]
 			}
 			//Cache hash - > {serverId, id}
-			self.cache.hset('h:' + hash, obj, cacheCallback);
+			//self.cache.hset('h:' + hash, obj, cacheCallback);
 		}
 
 		cb(null, obj);
@@ -121,7 +126,7 @@ function Store(cache, prefix) {
 }
 
 Store.prototype.nextId = function(cb){
-	var property = this.prefix+'-next-id';
+	var property = this.prefix+'next-id';
 	if(this.isMem) {
 		if(this.cache[property] == null) this.cache[property] = 0;
 		cb(null, this.cache[property]++);
@@ -144,11 +149,11 @@ Store.prototype.set = function(property, value, cb) {
 Store.prototype.hget = function(property, cb) {
 	property = this.prefix + property;
 	if(this.isMem) cb(null, this.cache[property]);
-	else this.cache.hmgetall(property, cb);
+	else this.cache.hgetall(property, cb);
 }
 
 Store.prototype.hset = function(property, value, cb) {
 	property = this.prefix + property;
 	if(this.isMem) this.cache[property] = value;
-	else this.cache.hset(property, value, cb);
+	else this.cache.hmset(property, value, cb);
 }

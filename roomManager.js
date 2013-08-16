@@ -162,6 +162,7 @@ Room.prototype.isOwner = function(userHashId, cb) {
  */
 Room.prototype.delete = function(cb) {
 	// delete rooms:id, rooms:id:playlist, rooms:id:users, rooms:id:songs, rooms:id:blocked, rooms:id:next-song-uid
+	var self = this;
 	this.client.multi()
 		.del('rooms:' + this.id)
 		.del(this.key('owner'))
@@ -170,6 +171,11 @@ Room.prototype.delete = function(cb) {
 		.del(this.key('users'))
 		.del(this.key('blocked'))
 		.del(this.key('next-song-uid'))
+		.keys(this.key('songs:*'), function(err, results) {
+			 results.forEach(function (reply, i) {
+	           self.client.del(reply, function(){});
+	        });
+		})
 		.exec(function (err, replies) {
             if(err) cb(err, null);
             else    cb(null, null);
@@ -260,7 +266,7 @@ Room.prototype.getUniquePlaylistId = function(cb) {
  			return;
  		}
 
- 		if(typeof firstSongUid !== 'undefined' || firstSongUid === null) {
+ 		if(typeof firstSongUid === 'undefined' || firstSongUid === null) {
  			cb('playlist-empty', null);
  			return;
  		}

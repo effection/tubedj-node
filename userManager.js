@@ -139,10 +139,24 @@ User.prototype.key = function(sub) {
 }
 
 /**
+ * Delete user hash.
+ */
+User.prototype.delete = function(cb) {
+	this.client.del(this.key(), cb);
+}
+
+/**
  * Get user's name from id.
  */
 User.prototype.getName = function(cb) {
 	this.client.hget(this.key(), 'name', cb);
+}
+
+/**
+ * Set a new name.
+ */
+User.prototype.changeName = function(newName, cb) {
+	this.client.hset(this.key(), 'name', newName, cb);
 }
 
 /**

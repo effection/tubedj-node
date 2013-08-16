@@ -150,10 +150,10 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	};
 
 	$scope.nextSong = function() {
-		if($scope.owner != $scope.GlobalState.user.id) {
+		//if($scope.owner != $scope.GlobalState.user.id) {
 			//TODO Alert disallowed to force next song
 			console.log('Next song success');
-		} else {
+		//} else {
 			$scope.room.all('next-song').post().then(function() {
 				//TODO nextSong() success 
 			}, function(reason) {
@@ -162,7 +162,7 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 				reason: reason
 				}, true);
 			});
-		}
+		//}
 	};
 
 	$scope.refreshPlaylist = function() {
@@ -234,5 +234,9 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 		$scope.addToPlaylist(song);
 	};
+
+	$scope.nextSongHelper = function() {
+		$scope.nextSong();
+	}
 	
 }]);

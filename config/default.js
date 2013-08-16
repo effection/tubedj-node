@@ -12,7 +12,7 @@ var config = {
 		 * User facing id hashing
 		 */
 		idLength: 8,
-		idKey: 'TODO ADD SALT',
+		idKey: 'Ro0m SALT',
 
 		/**
 		 * Cache encrypted/decrypted room ids for speed in memory or redis.
@@ -31,7 +31,7 @@ var config = {
 			/**
 			 * Use a redis instance to store all caching.
 			 */
-			inRedis: false
+			inRedis: true
 		},
 
 		/**
@@ -91,7 +91,7 @@ var config = {
 			/**
 			 * Use a redis instance to store all caching.
 			 */
-			inRedis: false
+			inRedis: true
 		},
 
 		/**

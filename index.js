@@ -35,6 +35,7 @@ var _ = require('underscore')
   , async = require('async')
   , winston = require('winston')
   , config = require('config')
+  , crypto = require('crypto')
 
   , redis = require("redis")
   , restify = require('restify')
@@ -97,11 +98,11 @@ io.configure('production', function() {
 	io.enable('browser client gzip');          // gzip the file
 	io.set('log level', 1);                    // reduce logging
 	io.set('transports', [                     // enable all transports (optional if you want flashsocket)
-	    'websocket'
-	    , 'flashsocket'
-	    , 'htmlfile'
-	    , 'xhr-polling'
-	    , 'jsonp-polling'
+	    'websocket', 
+	    'flashsocket', 
+	    'htmlfile', 
+	    'xhr-polling', 
+	    'jsonp-polling'
 	]);
 	io.set("polling duration", 10); 
 });
@@ -109,18 +110,69 @@ io.configure('production', function() {
 io.configure('development', function() { 
 	io.enable('browser client gzip');          // gzip the file
 	io.set('transports', [                     // enable all transports (optional if you want flashsocket)
-	    'websocket'
-	    , 'flashsocket'
-	    , 'htmlfile'
-	    , 'xhr-polling'
-	    , 'jsonp-polling'
+	    'websocket', 
+	    'flashsocket', 
+	    'htmlfile', 
+	    'xhr-polling', 
+	    'jsonp-polling'
 	]);
 	io.set("polling duration", 10); 
 });
 
 /****** Helpers *******/
 
+function calculateHmac(method, url, body, secret) {
+	var valueToSign = method+url+body;
+	var salt = 'JordanSaltsalt234' + secret;
+	
+	//SHA256 salt with valueToSign
+	var base64 = crypto.createHmac('sha256', salt).update(valueToSign).digest('base64');
 
+	return (base64);
+}
+
+function serializeToQueryString(obj) {
+  var str = [];
+  for(var p in obj)
+     str.push(encodeURIComponent(p) + "=" + encodeURIComponent(obj[p]));
+  return str.join("&");
+}
+
+/**
+ * Calculate hmac and compare with passed one
+ */
+function preHMACValid(req, res, next) {
+	var method = req.method;
+	var port = 8081;
+
+	var passedHmac = decodeURIComponent(req.query.signed);
+	delete req.query['signed'];
+
+	//Build url without signed query param
+
+	var queryString = serializeToQueryString(req.query);
+	queryString = queryString.length > 0 ? '?' + queryString : '';
+	req.host = 'localhost';
+	req.protocol = 'http';
+	var absoluteUrl = req.protocol + '://' + req.host  + ( port == 80 || port == 443 ? '' : ':'+port ) + req.path() + queryString;
+
+	
+	var hmac = '';
+	var userSecret = (req.user ? (req.user.hashId? req.user.hashId : '') : '');
+
+	if (method === "GET" || method  === "HEAD" || method === "DELETE") {
+		//HMAC the full url
+		hmac = calculateHmac(method, absoluteUrl, '', userSecret);
+		
+	} else {
+		//HMAC full url and body
+		hmac = calculateHmac(method, absoluteUrl, '', userSecret);
+	}
+	console.log('hmac ' + passedHmac + ' == ' + hmac + '(' + (passedHmac === hmac) + ')');
+	next();
+	//if(passedHmac === hmac) next();
+	//else return next(new restify.InvalidCredentialsError('Incorrect signature'), null);
+}
 
 /**
  * Decrypt room hash.
@@ -134,23 +186,22 @@ var getRoomFromHash = promisify(RoomManager.getRoomFromHash);
  * Returns false if invalid hash or {id, serverId, hashId} with hashId set to roomHash.
  * Note: Does not check if user exists!
  */
-function getUserFromCookie(cookies, checkExists) {
-
-	var def = deferred();
-
-
+function _getUserFromCookie(cookies, checkExists, cb) {
 	var hashId = cookies.get(config.cookieId, { signed: true });
-	if(typeof hashId === "undefined") def.resolve(false); 
+
+	if(typeof hashId === "undefined") cb(false, null); 
 	else {
 		UserManager.getUserFromHash(hashId, checkExists, function(err, user) {
-			if(!user) return def.reject(new restify.InvalidCredentialsError('Invalid user')); 
+			if(!user) return cb(false, null); 
 
-			def.resolve(_.extend(user, {hashId: hashId}));
+			cb(null, _.extend(user, {hashId: hashId}));
 		});
 	}
-
-	return def.promise;
 }
+
+var getUserFromCookie = promisify(_getUserFromCookie);
+
+
 /****** API ******/
 
 /**
@@ -220,7 +271,7 @@ function preIsAllowedToUseRoom(req, res, next) {
 		if(isBlocked == 1) {
 			return next(new restify.NotAuthorizedError('Not allowed to join this room.'));
 		}
-		pHasUserJoined(req.user.id)
+		pHasUserJoined(req.user.hashId)
 		.then(function(hasJoined) {
 			req.joinedRoom = hasJoined == 1;
 			return next();
@@ -314,14 +365,14 @@ Most frequent
  * Returns: {id: id, name: string}
  * Events: 
  */
-server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
+server.post('/api/users', preGetUserFromCookie, preHMACValid, function(req, res, next) {
 	var user = req.user;
 	var cookies = Cookies.fromHttp(req, res, userCookieKeygrip);
 
 	if(user !== false) {
 
 		UserManager.userExists(user.serverId, user.id, function(err, exists) {
-			if(err) return next(new restify.BadMethodError('Already created user'));
+			if(err) return next(new restify.BadMethodError('Couldn\'t check users'));
 			else if(exists) return next(new restify.BadMethodError('Already created user'));
 			else {
 				//Remove cookies and allow retry
@@ -338,7 +389,7 @@ server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
 		if(!name || !name.length || name.length < 2 || name.length > 10) 
 			return next(new restify.InvalidArgumentError('Name must be between 2 and 10 chars long'));
 
-		var createUser = promisify(UserManager.create)
+		var createUser = promisify(UserManager.create);
 
 
 		createUser(name)
@@ -355,10 +406,95 @@ server.post('/api/users', preGetUserFromCookie, function(req, res, next) {
 });
 
 /**
+ * Does user exist, if they do return id and name
+ */
+server.get('/api/users/:userId', preHMACValid, function(req, res, next) {
+	var userId = req.params.userId;
+
+	if(!req.params.userId) {
+		next(new restify.InvalidArgumentError('No user id'));
+		return;
+	}
+
+	//Decode hash
+	var decodeHash = promisify(UserManager.decodeHash);
+	var getUser = promisify(UserManager.getUser);
+
+	decodeHash(userId)
+	.then(function(idObj) {
+		getUser(idObj.serverId, idObj.id, true)
+		.then(function(user) {
+			//Return exists id and name
+
+			if(!user) {
+				res.json(200, {
+					exists: false
+				});
+			} else {
+				user.getName(function(err, name) {
+					if(err) return next(err, null);
+					res.json(200, {
+						exists: true,
+						id: user.id,
+						name: name
+					});
+				});
+			}
+		}).done();
+	}).done();
+
+});
+
+/**
+ * Delete user
+ */
+server.del('/api/users/me', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid], function(req, res, next) {
+	var user = req.user;
+	var userId = user.userId;
+
+	user.delete(function(err, response) {
+		if(err) return next(err, null);
+		//Remove cookies
+		var cookies = Cookies.fromHttp(req, res, userCookieKeygrip);
+		cookies.set(config.cookieId, '');
+		cookies.set(config.cookieId +'.sig', '');
+		res.json(200, {});
+	});
+});
+
+/**
+ * Change user name
+ * Body {newName: string}
+ * returns {id, name}
+ * Events:
+ */
+server.post('/api/users/me', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid], function(req, res, next) {
+	var user = req.user;
+	var name = req.body.newName;
+	if(!name || !name.length || name.length < 2 || name.length > 10) 
+			return next(new restify.InvalidArgumentError('Name must be between 2 and 10 chars long'));
+
+	//Delete user
+	var changeName =_.bind(promisify(user.changeName), user)
+
+	changeName(name)
+	.then(function(response) {
+
+		res.json(200, {
+			id: user.hashId,
+			name: name
+		});
+
+	}).done();
+
+});
+
+
+/**
  * Don't respond with any rooms.
  */
 server.get('/api/rooms', function(req, res, next) {
-	res.json(200, {msg:'You wont see any here'});
+	res.json(403, {msg:'You wont see any here'});
 });
 
 
@@ -368,7 +504,7 @@ server.get('/api/rooms', function(req, res, next) {
  * Returns {room: id}
  * Events: 
  */
-server.post('/api/rooms', [preUserMustExist, preGetUserFromCookie, preIsUserValid], function(req, res, next) {
+server.post('/api/rooms', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid], function(req, res, next) {
 	
 	var user = req.user;
 
@@ -399,7 +535,7 @@ server.post('/api/rooms', [preUserMustExist, preGetUserFromCookie, preIsUserVali
  * Returns: {id: id, playlist: [{},{}], users: [{},{}]}
  * Events: user:joined {user: id, name: string}
  */
-server.get('/api/rooms/:roomId', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preRoomMustExist, preGetRoomObject, preIsAllowedToUseRoom], function(req, res, next) {
+server.get('/api/rooms/:roomId', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preRoomMustExist, preGetRoomObject, preIsAllowedToUseRoom], function(req, res, next) {
 	//Join the socket.io room if it exists. and send back the playlist
 	var room = req.room;
 	var user = req.user;
@@ -507,7 +643,7 @@ server.get('/api/rooms/:roomId', [preUserMustExist, preGetUserFromCookie, preIsU
  * Returns: {}
  * Events user:disconnected {user: id}, room:closed {expected: bool}
  */
-server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, preGetRoomObject, preIsAllowedToUseRoom], function(req, res, next) {
+server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject, preIsAllowedToUseRoom], function(req, res, next) {
 	//Leave the socket.io room. Can happen just by disconnecting socket.io connection!
 	var room = req.room;
 	var user = req.user;
@@ -525,7 +661,7 @@ server.post('/api/rooms/:roomId/leave', [preGetUserFromCookie, preIsUserValid, p
  * Returns: {}
  * Events: playlist:next-song {}
  */
-server.post('/api/rooms/:roomId/next-song', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/next-song', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
@@ -560,7 +696,7 @@ server.post('/api/rooms/:roomId/next-song', [preUserMustExist, preGetUserFromCoo
  * Returns: {playlist: [{},{}]}
  * Events: 
  */
-server.get('/api/rooms/:roomId/playlist', preGetRoomObject, function(req, res, next) {
+server.get('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	var room = req.room;
 
 	room.getPlaylist(function(err, playlist) {
@@ -587,7 +723,7 @@ server.get('/api/rooms/:roomId/playlist', preGetRoomObject, function(req, res, n
  * Returns: {song: {}}
  * Events: playlist:song-added {song: {}}
  */
-server.post('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	//Add song to redis playlist and broadcast change to all users
 	var user = req.user;
 	var room = req.room;
@@ -634,17 +770,18 @@ server.post('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCook
 
 /** 
  * Remove song from playlist
- * Body: {songIndex: index}
+ * Body: {songUid: id}
  * Returns: {}
- * Events: playlist:song-removed {songIndex: index}
+ * Events: playlist:song-removed {songUid: id}
  */
-server.del('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+
+server.del('/api/rooms/:roomId/playlist/:songUid', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	//If isOwner, remove song from redis playlist and broadcast change to all users
 	var user = req.user;
 	var room = req.room;
 
-	if(!req.body.songUid) return next(new restify.MissingParameterError('No song uid given.'));
-	var songUid = req.body.songUid;
+	if(!req.params.songUid) return next(new restify.MissingParameterError('No song uid given.'));
+	var songUid = req.params.songUid;
 
 	function removeSong() {
 
@@ -684,7 +821,7 @@ server.del('/api/rooms/:roomId/playlist', [preUserMustExist, preGetUserFromCooki
  * Returns: {}
  * Events: user:disconnected {user: id}
  */
-server.post('/api/rooms/:roomId/user/:userId/block', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/user/:userId/block', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
@@ -743,7 +880,7 @@ server.post('/api/rooms/:roomId/user/:userId/block', [preUserMustExist, preGetUs
  * Returns: {}
  * Events: 
  */
-server.post('/api/rooms/:roomId/user/:userId/unblock', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preGetRoomObject], function(req, res, next) {
+server.post('/api/rooms/:roomId/user/:userId/unblock', [preUserMustExist, preGetUserFromCookie, preIsUserValid, preHMACValid, preGetRoomObject], function(req, res, next) {
 	var user = req.user;
 	var room = req.room;
 
@@ -872,7 +1009,7 @@ io.sockets.on('connection', function (socket) {
     	pGetUser(handshakeUser.serverId, handshakeUser.id, true)
     	.then(function(user) {
     		if(!user) {
-    		 	winston.log('error', 'Couldn\'t get user', err);
+    		 	winston.log('error', 'Couldn\'t get user', null);
     			return;
     		}
 
