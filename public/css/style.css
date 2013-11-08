@@ -1,0 +1,365 @@
+/* CSS crunched with Crunch - http://crunchapp.net/ */
+/*---------------------------------------------------
+    LESS Prefixer
+  ---------------------------------------------------
+    
+    All of the CSS3 fun, none of the prefixes!
+
+    As a rule, you can use the CSS properties you
+    would expect just by adding a '.':
+
+    box-shadow => .box-shadow(@args)
+
+    Also, when shorthand is available, arguments are
+    not parameterized. Learn CSS, not LESS Prefixer.
+
+    -------------------------------------------------
+    TABLE OF CONTENTS
+    (*) denotes a syntax-sugar helper
+    -------------------------------------------------
+
+        .animation(@args)
+            .animation-delay(@delay)
+            .animation-direction(@direction)
+            .animation-duration(@duration)
+            .animation-iteration-count(@count)
+            .animation-name(@name)
+            .animation-play-state(@state)
+            .animation-timing-function(@function)
+        .background-size(@args)
+        .border-radius(@args)
+        .box-shadow(@args)
+            .inner-shadow(@args) *
+        .box-sizing(@args)
+            .border-box() *
+            .content-box() *
+        .columns(@args)
+            .column-count(@count)
+            .column-gap(@gap)
+            .column-rule(@args)
+            .column-width(@width)
+        .gradient(@default,@start,@stop) *
+            .linear-gradient-top(@default,@color1,@stop1,@color2,@stop2,[@color3,@stop3,@color4,@stop4])*
+            .linear-gradient-left(@default,@color1,@stop1,@color2,@stop2,[@color3,@stop3,@color4,@stop4])*
+        .opacity(@factor)
+        .transform(@args)
+            .rotate(@deg)
+            .scale(@factor)
+            .translate(@x,@y)
+            .translate3d(@x,@y,@z)
+            .translateHardware(@x,@y) *
+        .text-shadow(@args)
+        .transition(@args)
+            .transition-delay(@delay)
+            .transition-duration(@duration)
+            .transition-property(@property)
+            .transition-timing-function(@function)
+
+
+
+    Credit to LESS Elements for the motivation and
+    to CSS3Please.com for implementation.
+
+    Copyright (c) 2012 Joel Sutherland
+    MIT Licensed:
+    http://www.opensource.org/licenses/mit-license.php
+
+-----------------------------------------------------*/
+/* Animation */
+/* Backface visibility */
+/* Background Size */
+/* Border Radius */
+/* Box Shadows */
+/* Box Sizing */
+/* Columns */
+/* Gradients */
+/* Opacity */
+/* Text Shadow */
+/* Transforms */
+/* Transitions */
+body {
+  background-color: #3f4347;
+  color: #e1e1e1;
+  margin: 0px;
+  padding: 0px;
+  font-family: 'Lato', sans-serif;
+}
+ul li {
+  list-style: none;
+}
+.takespace {
+  overflow: hidden;
+  display: inline;
+}
+.noblur {
+  -webkit-filter: none;
+  -moz-filter: none;
+  -o-filter: none;
+  -ms-filter: none;
+  filter: none;
+}
+#get-more-results {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 5px;
+  background-color: transparent;
+  border: 1px solid #8da9b4;
+  cursor: pointer;
+}
+#header {
+  width: 100%;
+  height: 67px;
+}
+#header #title-img {
+  position: relative;
+  top: 0%;
+  left: 50%;
+  margin-top: 0px;
+  margin-left: -241px;
+  width: 482px;
+  height: 67px;
+  background-image: url('../img/header.png');
+}
+#header:hover + #extra-header,
+#extra-header:hover {
+  height: 25px;
+}
+#extra-header {
+  width: 100%;
+  height: 0;
+  overflow: hidden;
+  text-align: center;
+  color: #b4d27e;
+  font-size: 20px;
+  -webkit-transition: height 0.2s ease-out;
+  -moz-transition: height 0.2s ease-out;
+  -o-transition: height 0.2s ease-out;
+  transition: height 0.2s ease-out;
+}
+#extra-header a {
+  color: #b4d27e;
+}
+#extra-header a:hover {
+  color: #b4d27e;
+}
+#extra-header a:active {
+  color: #b4d27e;
+}
+#extra-header a:visited {
+  color: #b4d27e;
+}
+#player-container {
+  width: 100%;
+  height: 400px;
+  padding: 10px 10px 0px 10px;
+}
+#player-container .video {
+  float: left;
+  width: 640px;
+  height: 390px;
+  background: #676666;
+}
+#player-container ul.playlist {
+  float: left;
+  width: 320px;
+  height: 100%;
+}
+#player-container ul.playlist .playlist-item {
+  position: relative;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+#player-container ul.playlist .playlist-item .thumbnail-container {
+  float: left;
+  position: relative;
+  margin: 0 8px 0 0;
+}
+#player-container ul.playlist .playlist-item .thumbnail-container img:hover {
+  -webkit-filter: none;
+  -moz-filter: none;
+  -o-filter: none;
+  -ms-filter: none;
+  filter: none;
+}
+#player-container ul.playlist .playlist-item .video-time {
+  display: block;
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  padding: 2px 3px;
+  color: #676666;
+  font-size: 10px;
+  background-color: #000;
+  overflow: hidden;
+}
+#player-container ul.playlist .playlist-item .details-container {
+  overflow: hidden;
+}
+#player-container ul.playlist .playlist-item .details-container .btn {
+  float: left;
+  width: 47%;
+  height: 60%;
+  border: 1px solid #676666;
+  color: #fb7363;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+}
+#player-container ul.playlist .playlist-item .details-container .btn:hover {
+  background-color: #fb7363;
+  color: #FFF;
+}
+#player-container ul.playlist .playlist-item .title {
+  display: block;
+  font-size: 1.0em;
+  max-height: 2.4em;
+  line-height: 1.2;
+  margin-bottom: 2px;
+  overflow: hidden;
+}
+#player-container ul.playlist .playlist-item .stat {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+}
+#player-container #userlist {
+  float: left;
+  color: #b4d27e;
+  cursor: pointer;
+  width: 43px;
+  height: 100%;
+  -webkit-transition: width 0.2s ease-in;
+  -moz-transition: width 0.2s ease-in;
+  -o-transition: width 0.2s ease-in;
+  transition: width 0.2s ease-in;
+  overflow: hidden;
+}
+#player-container #userlist ul.users {
+  list-style: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  float: left;
+  position: relative;
+  left: 40px;
+  width: 0;
+  color: #8da9b4;
+}
+#player-container #userlist .vertical-header {
+  float: left;
+  -webkit-transform: rotate(-90deg);
+  -moz-transform: rotate(-90deg);
+  -ms-transform: rotate(-90deg);
+  -o-transform: rotate(-90deg);
+  transform: rotate(-90deg);
+  position: relative;
+  top: 50px;
+  left: -27px;
+  -webkit-transition: all 0.2s ease-out;
+  -moz-transition: all 0.2s ease-out;
+  -o-transition: all 0.2s ease-out;
+  transition: all 0.2s ease-out;
+  font-size: 23px;
+  white-space: nowrap;
+}
+#player-container #userlist:hover {
+  width: 220px;
+}
+#player-container #userlist:hover ul.users {
+  width: 60%;
+}
+#lists-container {
+  width: 100%;
+  padding-left: 31px;
+}
+#lists-container .header {
+  width: 100%;
+  height: 46px;
+  padding: 0px 20px;
+}
+#lists-container #playlist {
+  width: 320px;
+}
+#lists-container #searchlist {
+  width: 650px;
+}
+#lists-container #searchlist ul {
+  height: 390px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+#lists-container #searchlist ul .video-list-item {
+  margin-left: -16px;
+  position: relative;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+#lists-container #searchlist ul .video-list-item .thumbnail-container {
+  float: left;
+  position: relative;
+  margin: 0 8px 0 0;
+}
+#lists-container #searchlist ul .video-list-item .video-time {
+  display: block;
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  padding: 2px 3px;
+  color: #676666;
+  font-size: 10px;
+  background-color: #000;
+  overflow: hidden;
+}
+#lists-container #searchlist ul .video-list-item .details-container {
+  overflow: hidden;
+}
+#lists-container #searchlist ul .video-list-item .details-container .btn {
+  float: left;
+  width: 47%;
+  height: 60%;
+  border: 1px solid #676666;
+  color: #fb7363;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+}
+#lists-container #searchlist ul .video-list-item .details-container .btn:hover {
+  background-color: #fb7363;
+  color: #FFF;
+}
+#lists-container #searchlist ul .video-list-item .title {
+  display: block;
+  font-size: 1.0em;
+  max-height: 2.4em;
+  line-height: 1.2;
+  margin-bottom: 2px;
+  overflow: hidden;
+}
+#lists-container #searchlist ul .video-list-item .stat {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+}
+#lists-container #searchlist input[type="text"] {
+  width: 80%;
+  background: transparent;
+  display: inline-block;
+  line-height: 29px;
+  border: none;
+  font-size: 26px;
+  color: #e1e1e1;
+}
+#lists-container #searchlist input[type="text"]::-webkit-input-placeholder {
+  color: #e1e1e1;
+}
+#lists-container #searchlist input[type="text"]:-moz-placeholder {
+  color: #e1e1e1;
+}
+#lists-container #searchlist input[type="text"]::-moz-placeholder {
+  color: #e1e1e1;
+}
+#lists-container #searchlist input[type="text"]:-ms-input-placeholder {
+  color: #e1e1e1;
+}
+#lists-container #searchlist input[type="text"]:focus {
+  color: #e1e1e1;
+}

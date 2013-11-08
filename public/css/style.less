@@ -1,0 +1,357 @@
+@import "prefixer.less";
+
+@color-red: #fb7363;
+@color-green: #b4d27e;
+@color-blue: #8da9b4;
+@color-off-white: #e1e1e1;
+@color-light-grey: #676666;
+@color-dark-grey: #3f4347;
+
+body {
+    background-color: @color-dark-grey;
+    color: @color-off-white;
+    
+    margin: 0px;
+    padding: 0px;
+    
+    font-family: 'Lato', sans-serif;
+}
+
+ul li {
+    list-style: none;
+}
+
+.takespace {
+    overflow: hidden;
+    display: inline;
+}
+
+.blur(@radius) { 
+    filter: blur(@radius); -webkit-filter: blur(@radius); -moz-filter: blur(@radius);
+    -o-filter: blur(@radius); -ms-filter: blur(@radius);
+    filter: url(blur.svg#blur);
+    filter:progid:DXImageTransform.Microsoft.Blur(PixelRadius='3'); 
+}
+
+.noblur {
+    -webkit-filter: none; -moz-filter: none;
+    -o-filter: none; -ms-filter: none;
+    filter: none;
+}
+
+#get-more-results {
+    display:inline-block;
+    margin-top: 2px;
+    padding: 5px;
+    background-color: transparent;
+    border: 1px solid @color-blue;
+    cursor: pointer;
+}
+
+#header {
+    width: 100%;
+    height: 67px;
+    #title-img {
+        position: relative;
+        top: 0%;
+        left: 50%;
+        margin-top: 0px;
+        margin-left: -241px;
+        
+        width: 482px;
+        height: 67px;
+        background-image: url('../img/header.png');
+        
+    }
+}
+#header:hover + #extra-header,  #extra-header:hover{
+    height: 25px;
+}
+
+#extra-header {
+    width: 100%;
+    height: 0;
+    overflow: hidden;
+    text-align: center;
+    color: @color-green;
+    font-size:20px;
+    
+    a {
+        color: @color-green;
+        &:hover {color: @color-green;}
+        &:active {color: @color-green;}
+        &:visited {color: @color-green;}
+    }
+    
+    .transition(height 0.2s ease-out);
+}
+
+#content {
+    
+}
+
+#player-container {
+    width: 100%;
+    height: 400px;
+    
+    padding: 10px 10px 0px 10px;
+    
+    .video {
+        float: left;
+        width: 640px;
+        height: 390px;
+        background:@color-light-grey;
+    }
+    
+    ul.playlist {
+        float: left;
+         width: 320px;
+         height: 100%;
+         
+        .playlist-item {
+            position: relative;
+            margin-bottom: 8px;
+            overflow: hidden;
+    
+            .thumbnail-container {
+                float: left; 
+                position: relative;
+                margin: 0 8px 0 0;
+                
+                 img {
+                    //.blur(3px);
+                    &:hover {
+                        .noblur;
+                    }
+                }
+            }
+            
+            .video-time {
+                display: block;
+                position: absolute;
+                bottom: 5px;
+                right: 5px;
+                
+                padding: 2px 3px;
+                
+                color: @color-light-grey;
+                font-size: 10px;
+                background-color: #000;
+                overflow: hidden;
+            }
+            
+            .details-container {
+                overflow: hidden;
+                .btn {
+                    float: left;
+                    width: 47%;
+                    height: 60%;
+                    border: 1px solid @color-light-grey;
+                    color: @color-red;
+                    
+                    text-align: center;
+                    vertical-align: middle;
+                    
+                    cursor: pointer;
+                    
+                    &:hover {
+                        background-color: @color-red;
+                        color: #FFF;
+                    }
+                }
+            }
+            
+            .title {
+                display: block; 
+                //font-weight:bold;
+                font-size: 1.0em; 
+                max-height:2.4em; 
+                line-height: 1.2; 
+                margin-bottom:2px;
+                overflow: hidden;
+            }
+            
+            .stat {
+                display: block;
+                font-size: 12px;
+                overflow: hidden;
+            }
+            
+            .date {
+               // font-weight: 700;  
+            }
+        }
+    }
+    
+    #userlist {
+        float: left;
+        color: @color-green;
+        cursor: pointer;
+        
+        width: 43px;
+        height: 100%;
+        .transition(width 0.2s ease-in);
+        
+        overflow: hidden;
+        
+        ul.users {
+            list-style: none;
+            overflow-x: hidden;
+            overflow-y: auto;
+            
+            float:left;
+            position: relative;
+            left: 40px;
+            width: 0;
+            
+            color: @color-blue;
+        }
+        
+        .vertical-header {
+            float:left;
+
+            .rotate(-90deg);
+            position: relative;
+            top: 50px;
+            left: -27px;
+            
+            .transition(all 0.2s ease-out);
+            
+            font-size: 23px;
+            white-space: nowrap
+        }
+        
+        &:hover {
+            width: 220px;
+            & ul.users {
+                width: 60%;
+            }
+            &, .vertical-header {
+
+            }
+        }
+    }
+}
+
+#lists-container {
+    width: 100%;
+    padding-left:31px;
+    
+    .header {
+        width: 100%;
+        height:46px;
+        
+        padding: 0px 20px;
+    }
+    
+    #playlist {
+        width: 320px;
+    }
+    
+    #searchlist {
+        width: 650px;
+       
+        ul {
+            height: 390px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            
+            .video-list-item {
+                margin-left: -16px;
+                position: relative;
+                margin-bottom: 8px;
+                overflow: hidden;
+
+                .thumbnail-container {
+                    float: left; 
+                    position: relative;
+                    margin: 0 8px 0 0;
+                }
+                
+                .video-time {
+                    display: block;
+                    position: absolute;
+                    bottom: 5px;
+                    right: 5px;
+                    
+                    padding: 2px 3px;
+                    
+                    color: @color-light-grey;
+                    font-size: 10px;
+                    background-color: #000;
+                    overflow: hidden;
+                }
+                
+                .details-container {
+                    overflow: hidden;
+                    .btn {
+                        float: left;
+                        width: 47%;
+                        height: 60%;
+                        border: 1px solid @color-light-grey;
+                        color: @color-red;
+                        
+                        text-align: center;
+                        vertical-align: middle;
+                        
+                        cursor: pointer;
+                        
+                        &:hover {
+                            background-color: @color-red;
+                            color: #FFF;
+                        }
+                    }
+                }
+                
+                .title {
+                    display: block; 
+                    //font-weight:bold;
+                    font-size: 1.0em; 
+                    max-height:2.4em; 
+                    line-height: 1.2; 
+                    margin-bottom:2px;
+                    overflow: hidden;
+                }
+                
+                .stat {
+                    display: block;
+                    font-size: 12px;
+                    overflow: hidden;
+                }
+                
+                .date {
+                   // font-weight: 700;  
+                }
+            }
+        }
+   
+        input[type="text"] {
+            width: 80%;
+            background: transparent;
+            display: inline-block;
+            line-height: 29px;  
+            border: none;
+            font-size: 26px;
+            
+            color: @color-off-white;
+            
+            &::-webkit-input-placeholder {
+                color: @color-off-white;
+            }
+            &:-moz-placeholder {
+                color: @color-off-white;
+            }
+            &::-moz-placeholder {
+                color: @color-off-white;
+            }
+            &:-ms-input-placeholder {
+                color: @color-off-white;
+            }
+            
+             &:focus {
+                color: @color-off-white;
+            }
+        }
+    }
+}
+

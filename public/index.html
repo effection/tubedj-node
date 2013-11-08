@@ -8,6 +8,7 @@
 		<title>tubedj</title>
 		<link rel='apple-touch-icon' href='img/apple-touch-icon.png' />
         
+        <link href='http://fonts.googleapis.com/css?family=Lato:300,400' rel='stylesheet' type='text/css'>
 		<link rel='stylesheet' href='css/style.css'>
 		<link rel='stylesheet' href='css/font-awesome.css'/>
 		
@@ -45,27 +46,179 @@
 		<script src='js/app.js'></script>
 		<script src='js/app.factory.global-state.js'></script>
 		<script src='js/app.factory.socket.js'></script>
+
+		<script src='js/app.factory.youtube.js'></script>
+		<script src='js/app.service.youtube.js'></script>
+
         <script src='js/app.controller.main.js'></script>
+        <script src='js/app.controller.search.js'></script>
         <script src='js/app.controller.room.js'></script>
+
+        <script src='js/app.directive.timeago.js'></script>
+
+        <script src="https://www.youtube.com/player_api"></script>
         <!--
         <script src='js/app.controller.search.js'></script>
         <script src='js/app.controller.options.js'></script>
         <script src='js/app.controller.playlist.js'></script>
         
-        <script src='js/app.factory.youtube.js'></script>
-		<script src='js/app.service.youtube.js'></script>
+        
         
         <script src='js/app.directive.ngtap.js'></script>
-        <script src='js/app.directive.timeago.js'></script>
+        
         <script src='js/app.directive.toggleOption.js'></script>
         <script src='js/app.directive.inlineEdit.js'></script>
         <script src='js/app.directive.clickState.js'></script>
         <script src='js/app.directive.revealable.js'></script>
         -->
+
+
+        <script>
+        	var ytPlayer = null;
+        	function onYouTubePlayerAPIReady() {
+	            ytPlayer = new YT.Player('current-player', {
+											 height: '640',
+											 width: '390',
+											 videoId: '',
+											 playerVars: {
+												playsinline: 1,
+												autoplay: 1
+											 },
+											 events: {
+												'onReady': onPlayerReady,
+												'onStateChange': onPlayerStateChange
+											 }
+	                                     });
+	        }
+	        
+	        function onPlayerReady(e) {
+				e.target.setVolume(100);
+	            //e.target.playVideo();
+	        }
+			
+			function onPlayerStateChange(e) {
+	            var state = e.data;
+				console.log(state);
+				switch(state) {
+					case YT.PlayerState.PLAYING:
+						
+					break;
+					case YT.PlayerState.PAUSED:
+						
+					break;
+					case YT.PlayerState.BUFFERING:
+						
+					break;
+					case YT.PlayerState.CUED:
+						
+					break;
+					case YT.PlayerState.ENDED:
+						
+					case -1:
+						
+					break;
+				};
+	        }
+
+        </script>
 	</head>
 	
 	<body ng-controller='MainController'>
+
+	<div ng-controller='RoomController'>
+		<div id='header'>
+			<div id='title-img'></div>
+		</div>
+		<div id='extra-header'>
+			app link: <a target='_blank' ng-href='tubedj://join?{{id}}'>tubedj://join?{{id}}</a>
+		</div>
+
+		<div id='content'>
+			<div id='player-container'>
+				<div id='userlist'>
+					<div class='vertical-header'>
+						<ng-pluralize count="users.length"
+	                 		when="{'0': 'People',
+	                    	'one': '1 person',
+	                    	'other': '{} people'}"></ng-pluralize>
+                    </div>
+					<ul class='users'>
+						<li ng-repeat='user in users'>
+							<span>{{user.name}}</span>
+						</li>
+					</ul>
+				</div>
+				<div id='current-player' class='video'></div>
+
+				<ul class='playlist'>
+					<li class="playlist-item" ng-repeat="item in playlist">
+				        <div>
+				            <div class="thumbnail-container">
+				                <img src="{{ item.thumbnail }}" width="96" height="72"/>
+				                <span class="video-time">{{ item.duration.str }}</span>
+				            </div>
+				            <div class="details-container">
+				                <span class="title" dir="ltr" title="{{ item.title }}">{{ item.title }}</span>
+				                <span class="stat">by <span class="yt-user-name " dir="ltr">{{ item.author.name }}</span></span>
+				                <span class="stat date" jq-timeago="{{ item.published }}">{{ item.ownerName }}</span>
+				            </div>
+				        </div>
+				    </li>
+				</ul>
+
+			</div>
+			<div id='lists-container'>
+				<div id='searchlist' ng-controller="SearchController">
+					<div class='header'>
+						<form id="search-form" ng-submit="onSearchSubmit();" style="position: relative; top: -10px;">
+				            <i class="icon-search" style="font-size:27px;"></i>
+				            <div class="takespace">
+				                <input id="search-box" type="text" name="search" ng-model="varSearch" placeholder="search youtube"/>
+				            </div>
+				        </form>
+				    </div>
+					<ul>
+						<li class="video-list-item" ng-repeat="item in items">
+					        <div>
+					            <div class="thumbnail-container">
+					                <img src="{{ item.thumbnail }}" width="96" height="72"/>
+					                <span class="video-time">{{ item.duration.str }}</span>
+					            </div>
+					            <div class="details-container">
+					                <span class="title" dir="ltr" title="{{ item.title }}">{{ item.title }}</span>
+					                <span class="stat">by <span class="yt-user-name " dir="ltr">{{ item.author.name }}</span></span>
+					                <span class="stat date" jq-timeago="{{ item.published }}">{{ item.published }}</span>
+					            </div>
+					        </div>
+					    </li>
+
+					     <!-- Get more results button -->
+					    <li>
+					        <div ng-show="!isGettingMoreResults && items.length > 0" style="width: 100%; text-align:center; margin-top: 10px; padding-bottom:20px;">
+					        	<span id="get-more-results" ng-click="getMoreResults()">Get more results</span>
+					        </div>
+					        <!-- Loading spinner for get more results -->
+					        <div class="loading spin-infinite" ng-show="isGettingMoreResults">
+					        	<i class="icon-spinner icon-2x"></i>
+					        </div>
+					    </li>
+					</ul>
+
+				</div>
+			</div>
+
+			<div>
+				<input type='text'  ng-model='GlobalState.user.name'/>
+				<input type='button' ng-click='createUser();' value='Create user'/>
+				<input type='button' ng-click='create();' value='Create room'/>
+				<input type='button' ng-click='joinHelper();' value='Join room'/>
+				<input type='button' ng-click='leave();' value='leave room'/>
+			</div>
+
+		</div>
+	</div>
 		<!--<div ng-view></div>-->
+		<!--
 		<div ng-controller='RoomController'>
 			<div>
 				<input type='text'  ng-model='username'/>
@@ -107,5 +260,6 @@
 				<input type='button' ng-click='nextSongHelper()' value='next song'/>
 			</div>
 		</div>
+		-->
 	</body>
 </html>

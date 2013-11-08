@@ -1,10 +1,10 @@
-app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function RoomController($scope, Restangular, socket) {
+app.controller('RoomController', ['$scope', 'Restangular', 'Socket', 'youtubeService', function RoomController($scope, Restangular, socket, youtubeService) {
 
 	var rooms = Restangular.all('rooms');
 
-	$scope.username = 'Jordan';
+	$scope.username = 'Browser';
 
-	$scope.id = "piyp5sbi";
+	$scope.id = "";
 	$scope.owner = null;
 	$scope.playlist = [];
 	$scope.users = [];
@@ -56,11 +56,33 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 		if($scope.playlist.length > 0) {
 			var lastSong = $scope.playlist.shift();
 			console.log('Removed song from playlist', lastSong);
+
+			//TODO Load next youtube song
 		}
 	});
 	socket.on('playlist:song-added', function (data) {
 		console.log('New song added', data);
-		$scope.playlist.push(data.song);
+
+		youtubeService.getSong(data.song.id)
+		.then(function(youtubeResult) {
+			youtubeResult.ownerName = '';
+
+			for(var i = 0; i < $scope.users.length; i++) {
+				if($scope.users[i].id === data.song.owner) {
+					youtubeResult.ownerName = $scope.users[i].name;
+					break;
+				}
+			}
+			youtubeResult.uid = data.song.uid;
+
+
+			$scope.playlist.push(youtubeResult);
+		}, function() {
+			//Error
+		});
+
+		
+		//TODO IF first song load song
 	});
 	socket.on('playlist:song-removed', function (data) {
 		console.log('Song removed from playlist', data);
@@ -78,8 +100,18 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 
 	
 	$scope.createUser = function() {
-		Restangular.all('users').post({name: $scope.username}).then(function(response) {
+		if($scope.GlobalState.user.name.length < 3 && $scope.GlobalState.user.name.length > 10) {
+			$scope.onError({
+				msg: 'Name must be between 3 and 10 characters', 
+				reason: reason
+			}, true);
+			return;
+		}
+
+		Restangular.all('users').post({name: $scope.GlobalState.user.name}).then(function(response) {
 			console.log('New user', response);
+			$scope.GlobalState.user.name = response.name;
+			$scope.GlobalState.user.id = response.id;
 		}, function(reason) {
 			if(reason.status == 300) {
 				$scope.createUser();
@@ -122,7 +154,7 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	$scope.join = function(roomId) {
 		if(roomId === null || roomId.length < 8) return;
 
-		$scope.users = [];
+		$scope.users = [$scope.GlobalState.user];
 
 		Restangular.one('rooms', roomId).get().then(function(response) {
 			$scope.GlobalState.room.id = response.id;
@@ -150,10 +182,10 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 	};
 
 	$scope.nextSong = function() {
-		//if($scope.owner != $scope.GlobalState.user.id) {
+		if($scope.owner != $scope.GlobalState.user.id) {
 			//TODO Alert disallowed to force next song
 			console.log('Next song success');
-		//} else {
+		} else {
 			$scope.room.all('next-song').post().then(function() {
 				//TODO nextSong() success 
 			}, function(reason) {
@@ -162,7 +194,7 @@ app.controller('RoomController', ['$scope', 'Restangular', 'Socket', function Ro
 				reason: reason
 				}, true);
 			});
-		//}
+		}
 	};
 
 	$scope.refreshPlaylist = function() {
